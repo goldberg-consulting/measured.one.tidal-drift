@@ -69,10 +69,22 @@ class StreamingNetworkService: ObservableObject {
     
     /// Start advertising available apps on the network
     func startHosting(apps: [StreamableApp]) {
-        guard !isHosting else { return }
+        guard !isHosting else { 
+            #if DEBUG
+            print("🎬 Already hosting, skipping")
+            #endif
+            return 
+        }
+        
+        #if DEBUG
+        print("🎬 Starting hosting with \(apps.count) apps...")
+        #endif
         
         // Convert to shareable format
         hostedApps = apps.compactMap { $0.bundleIdentifier }
+        
+        // Set hosting to true immediately for UI feedback
+        isHosting = true
         
         do {
             // Create listener for incoming connections
@@ -118,10 +130,16 @@ class StreamingNetworkService: ObservableObject {
             
             listener?.start(queue: queue)
             
+            #if DEBUG
+            print("🎬 Listener started on port \(streamingPort)")
+            #endif
+            
         } catch {
             #if DEBUG
             print("🎬 Failed to start streaming host: \(error)")
             #endif
+            isHosting = false
+            hostedApps = []
         }
     }
     
@@ -210,7 +228,19 @@ class StreamingNetworkService: ObservableObject {
     
     /// Start discovering streaming hosts on the network
     func startDiscovery() {
-        guard !isDiscovering else { return }
+        guard !isDiscovering else { 
+            #if DEBUG
+            print("🔍 Already discovering, skipping")
+            #endif
+            return 
+        }
+        
+        #if DEBUG
+        print("🔍 Starting discovery...")
+        #endif
+        
+        // Set discovering to true immediately for UI feedback
+        isDiscovering = true
         
         let parameters = NWParameters()
         parameters.includePeerToPeer = true
