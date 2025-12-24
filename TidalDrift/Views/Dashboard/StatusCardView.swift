@@ -64,6 +64,26 @@ struct StatusCardView: View {
                 .foregroundColor(.accentColor)
             }
             
+            // TidalDrift peer count
+            let peerCount = appState.discoveredDevices.filter { $0.isTidalDriftPeer }.count
+            if peerCount > 0 {
+                HStack {
+                    Image(systemName: "wave.3.right")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    
+                    Text("\(peerCount) TidalDrift peer\(peerCount == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    
+                    Spacer()
+                    
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                }
+            }
+            
             HStack(spacing: 8) {
                 Button("System Settings") {
                     SharingConfigurationService.shared.openSharingPreferences()

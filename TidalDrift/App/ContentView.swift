@@ -15,6 +15,10 @@ struct ContentView: View {
             appState.loadTrustedDevices()
             appState.loadConnectionHistory()
             NetworkDiscoveryService.shared.startBrowsing()
+            
+            // Start TidalDrift peer discovery and advertising
+            TidalDriftPeerService.shared.startAdvertising()
+            TidalDriftPeerService.shared.startDiscovery()
         }
     }
 }

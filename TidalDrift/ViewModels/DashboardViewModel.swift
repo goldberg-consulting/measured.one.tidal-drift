@@ -49,13 +49,26 @@ class DashboardViewModel: ObservableObject {
             }
         }
         
-        switch sortOrder {
-        case .name:
-            filtered.sort { $0.name < $1.name }
-        case .lastSeen:
-            filtered.sort { $0.lastSeen > $1.lastSeen }
-        case .status:
-            filtered.sort { $0.isOnline && !$1.isOnline }
+        // Primary sort: TidalDrift peers first
+        // Secondary sort: based on user preference
+        filtered.sort { device1, device2 in
+            // TidalDrift peers always come first
+            if device1.isTidalDriftPeer != device2.isTidalDriftPeer {
+                return device1.isTidalDriftPeer
+            }
+            
+            // Within same category, apply user's sort preference
+            switch sortOrder {
+            case .name:
+                return device1.name < device2.name
+            case .lastSeen:
+                return device1.lastSeen > device2.lastSeen
+            case .status:
+                if device1.isOnline != device2.isOnline {
+                    return device1.isOnline
+                }
+                return device1.name < device2.name
+            }
         }
         
         return filtered
