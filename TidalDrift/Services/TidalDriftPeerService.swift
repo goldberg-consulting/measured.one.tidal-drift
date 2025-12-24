@@ -4,6 +4,7 @@ import IOKit
 import os.log
 
 /// Service to advertise this TidalDrift instance and discover peers
+/// Uses modern NWListener/NWBrowser API for better compatibility and reliability
 class TidalDriftPeerService: NSObject, ObservableObject {
     static let shared = TidalDriftPeerService()
     
@@ -33,16 +34,17 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     @Published var discoveredPeers: [String: PeerInfo] = [:] // keyed by hostname/IP
     @Published var isAdvertising = false
     
-    // Use older NetService APIs which have better compatibility
-    private var netService: NetService?
-    private var netServiceBrowser: NetServiceBrowser?
-    private var discoveredServices: [NetService] = []
+    // Use modern Network.framework APIs (same as ClipboardSyncService)
+    private var listener: NWListener?
+    private var browser: NWBrowser?
+    private var resolvingConnections: [String: NWConnection] = [:] // Track connections for IP resolution
     
-    private let serviceType = "_tidaldrift._tcp."
+    private let serviceType = "_tidaldrift._tcp" // No trailing dot for NWListener
     private let serviceDomain = "local."
-    private let port: Int32 = 51235
+    private let port: UInt16 = 51235
     
     private let localInfo: PeerInfo
+    private let queue = DispatchQueue.main // Use main queue like ClipboardSyncService
     
     struct PeerInfo: Codable {
         let hostname: String
@@ -85,80 +87,136 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         Self.log("Model: \(localInfo.modelName)")
     }
     
-    // MARK: - Advertising (using NetService for better compatibility)
+    // MARK: - Advertising (using NWListener like ClipboardSyncService)
     
     func startAdvertising() {
-        guard netService == nil else {
+        guard listener == nil else {
             Self.log("Already advertising, skipping")
             return
         }
         
-        Self.log("Starting advertising as '\(localInfo.hostname)' using NetService")
+        Self.log("Starting advertising as '\(localInfo.hostname)' using NWListener")
         
-        // Create NetService for advertising - use port 0 for auto-assign
-        netService = NetService(
-            domain: "",  // Empty domain for local network
-            type: "_tidaldrift._tcp.",
-            name: localInfo.hostname,
-            port: 0  // Auto-assign port
-        )
-        
-        // Set TXT record with our info
-        let txtData = createTXTRecordData()
-        netService?.setTXTRecord(txtData)
-        
-        netService?.delegate = self
-        netService?.publish()  // Simple publish without options
-        
-        Self.log("NetService publish started")
-    }
-    
-    func stopAdvertising() {
-        netService?.stop()
-        netService = nil
-        DispatchQueue.main.async {
-            self.isAdvertising = false
+        do {
+            let params = NWParameters.tcp
+            params.includePeerToPeer = true
+            
+            listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
+            
+            // Set up Bonjour service advertisement
+            listener?.service = NWListener.Service(
+                name: localInfo.hostname,
+                type: serviceType,
+                domain: serviceDomain,
+                txtRecord: createTXTRecord()
+            )
+            
+            listener?.stateUpdateHandler = { [weak self] state in
+                DispatchQueue.main.async {
+                    switch state {
+                    case .ready:
+                        Self.log("✅ NWListener ready - service published successfully")
+                        self?.isAdvertising = true
+                    case .failed(let error):
+                        Self.log("❌ NWListener failed: \(error.localizedDescription)")
+                        self?.isAdvertising = false
+                    case .cancelled:
+                        Self.log("NWListener cancelled")
+                        self?.isAdvertising = false
+                    case .waiting(let error):
+                        Self.log("NWListener waiting: \(error.localizedDescription)")
+                    default:
+                        break
+                    }
+                }
+            }
+            
+            listener?.newConnectionHandler = { [weak self] connection in
+                Self.log("New connection received from peer")
+                // Accept connections from other TidalDrift instances
+                connection.start(queue: self?.queue ?? .main)
+            }
+            
+            listener?.start(queue: queue)
+            Self.log("NWListener started on port \(port)")
+            
+        } catch {
+            Self.log("❌ Failed to create NWListener: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+                self.isAdvertising = false
+            }
         }
     }
     
-    private func createTXTRecordData() -> Data {
-        let dict: [String: Data] = [
-            "model": localInfo.modelName.data(using: .utf8) ?? Data(),
-            "modelId": localInfo.modelIdentifier.data(using: .utf8) ?? Data(),
-            "cpu": localInfo.processorInfo.data(using: .utf8) ?? Data(),
-            "mem": "\(localInfo.memoryGB)".data(using: .utf8) ?? Data(),
-            "os": localInfo.macOSVersion.data(using: .utf8) ?? Data(),
-            "user": localInfo.userName.data(using: .utf8) ?? Data(),
-            "uptime": "\(localInfo.uptimeHours)".data(using: .utf8) ?? Data(),
-            "version": localInfo.tidalDriftVersion.data(using: .utf8) ?? Data(),
-            "screen": (localInfo.screenSharingEnabled ? "1" : "0").data(using: .utf8) ?? Data(),
-            "file": (localInfo.fileSharingEnabled ? "1" : "0").data(using: .utf8) ?? Data()
-        ]
-        return NetService.data(fromTXTRecord: dict)
+    func stopAdvertising() {
+        listener?.cancel()
+        listener = nil
+        DispatchQueue.main.async {
+            self.isAdvertising = false
+        }
+        Self.log("Stopped advertising")
     }
     
-    // MARK: - Discovery (using NetServiceBrowser for better compatibility)
+    private func createTXTRecord() -> NWTXTRecord {
+        var txtRecord = NWTXTRecord()
+        txtRecord["model"] = localInfo.modelName
+        txtRecord["modelId"] = localInfo.modelIdentifier
+        txtRecord["cpu"] = localInfo.processorInfo
+        txtRecord["mem"] = "\(localInfo.memoryGB)"
+        txtRecord["os"] = localInfo.macOSVersion
+        txtRecord["user"] = localInfo.userName
+        txtRecord["uptime"] = "\(localInfo.uptimeHours)"
+        txtRecord["version"] = localInfo.tidalDriftVersion
+        txtRecord["screen"] = localInfo.screenSharingEnabled ? "1" : "0"
+        txtRecord["file"] = localInfo.fileSharingEnabled ? "1" : "0"
+        return txtRecord
+    }
+    
+    // MARK: - Discovery (using NWBrowser like ClipboardSyncService)
     
     func startDiscovery() {
-        guard netServiceBrowser == nil else {
+        guard browser == nil else {
             Self.log("Already browsing, skipping")
             return
         }
         
-        Self.log("Starting discovery for _tidaldrift._tcp.")
+        Self.log("Starting discovery for \(serviceType)")
         
-        netServiceBrowser = NetServiceBrowser()
-        netServiceBrowser?.delegate = self
-        // Use empty domain for local network search
-        netServiceBrowser?.searchForServices(ofType: "_tidaldrift._tcp.", inDomain: "")
+        let params = NWParameters()
+        params.includePeerToPeer = true
         
-        Self.log("NetServiceBrowser search started")
+        browser = NWBrowser(for: .bonjour(type: serviceType, domain: serviceDomain), using: params)
+        
+        browser?.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                Self.log("✅ NWBrowser ready - browsing started")
+            case .failed(let error):
+                Self.log("❌ NWBrowser failed: \(error.localizedDescription)")
+            case .cancelled:
+                Self.log("NWBrowser cancelled")
+            default:
+                break
+            }
+        }
+        
+        browser?.browseResultsChangedHandler = { [weak self] results, changes in
+            Task { @MainActor in
+                self?.handleBrowseResults(results, changes: changes)
+            }
+        }
+        
+        browser?.start(queue: queue)
+        Self.log("NWBrowser started")
     }
     
     func stopDiscovery() {
-        netServiceBrowser?.stop()
-        netServiceBrowser = nil
-        discoveredServices.removeAll()
+        browser?.cancel()
+        browser = nil
+        // Cancel any pending resolution connections
+        resolvingConnections.values.forEach { $0.cancel() }
+        resolvingConnections.removeAll()
+        Self.log("Stopped discovery")
     }
     
     func refreshDiscovery() {
@@ -169,8 +227,30 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         }
     }
     
-    private func processDiscoveredService(_ service: NetService) {
-        let name = service.name
+    private func handleBrowseResults(_ results: Set<NWBrowser.Result>, changes: Set<NWBrowser.Result.Change>) {
+        for change in changes {
+            switch change {
+            case .added(let result):
+                handleDiscoveredService(result)
+            case .removed(let result):
+                handleRemovedService(result)
+            case .changed(let old, let new, _):
+                // Service updated
+                handleRemovedService(old)
+                handleDiscoveredService(new)
+            case .identical:
+                // No change needed
+                break
+            @unknown default:
+                break
+            }
+        }
+    }
+    
+    private func handleDiscoveredService(_ result: NWBrowser.Result) {
+        guard case .service(let name, _, _, _) = result.endpoint else {
+            return
+        }
         
         // Skip ourselves
         if name == localInfo.hostname {
@@ -178,93 +258,178 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             return
         }
         
-        Self.log("Processing discovered service: '\(name)'")
+        Self.log("Found service: '\(name)'")
         
-        // Get TXT record
-        if let txtData = service.txtRecordData() {
-            let txtDict = NetService.dictionary(fromTXTRecord: txtData)
-            let peer = parseTXTRecord(txtDict, name: name)
-            Self.log("Parsed TXT: model=\(peer.modelName), user=\(peer.userName)")
+        // Extract TXT record from metadata
+        var peerInfo: PeerInfo?
+        if case .bonjour(let txtRecord) = result.metadata {
+            peerInfo = parseTXTRecord(txtRecord, name: name)
+        } else {
+            // Create minimal peer info if no TXT record
+            peerInfo = PeerInfo(
+                hostname: name,
+                ipAddress: "",
+                modelName: "Unknown",
+                modelIdentifier: "",
+                processorInfo: "",
+                memoryGB: 0,
+                macOSVersion: "",
+                userName: "",
+                uptimeHours: 0,
+                tidalDriftVersion: "",
+                screenSharingEnabled: false,
+                fileSharingEnabled: false
+            )
+        }
+        
+        guard let peer = peerInfo else {
+            Self.log("Failed to parse peer info for '\(name)'")
+            return
+        }
+        
+        // Resolve IP address by attempting a connection
+        resolvePeerIP(result: result, peer: peer)
+    }
+    
+    private func resolvePeerIP(result: NWBrowser.Result, peer: PeerInfo) {
+        // Check if already resolving
+        if resolvingConnections[peer.hostname] != nil {
+            return
+        }
+        
+        let connection = NWConnection(to: result.endpoint, using: .tcp)
+        resolvingConnections[peer.hostname] = connection
+        
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self = self else { return }
             
-            // Get IP from resolved addresses
-            var ipAddress = ""
-            if let addresses = service.addresses {
-                for address in addresses {
-                    if let ip = extractIPAddress(from: address) {
-                        ipAddress = ip
+            switch state {
+            case .ready:
+                // Extract IP from connection path
+                if let path = connection.currentPath,
+                   case .hostPort(let host, _) = path.remoteEndpoint {
+                    var ipAddress = ""
+                    switch host {
+                    case .ipv4(let addr):
+                        ipAddress = "\(addr)"
+                    case .ipv6(let addr):
+                        let addrString = "\(addr)"
+                        // Skip IPv6 link-local addresses
+                        if !addrString.hasPrefix("fe80:") {
+                            ipAddress = addrString
+                        }
+                    case .name(let hostname, _):
+                        ipAddress = hostname
+                    @unknown default:
                         break
                     }
+                    
+                    // Clean IP (remove interface suffix)
+                    if let percentIndex = ipAddress.firstIndex(of: "%") {
+                        ipAddress = String(ipAddress[..<percentIndex])
+                    }
+                    
+                    if !ipAddress.isEmpty {
+                        let updatedPeer = PeerInfo(
+                            hostname: peer.hostname,
+                            ipAddress: ipAddress,
+                            modelName: peer.modelName,
+                            modelIdentifier: peer.modelIdentifier,
+                            processorInfo: peer.processorInfo,
+                            memoryGB: peer.memoryGB,
+                            macOSVersion: peer.macOSVersion,
+                            userName: peer.userName,
+                            uptimeHours: peer.uptimeHours,
+                            tidalDriftVersion: peer.tidalDriftVersion,
+                            screenSharingEnabled: peer.screenSharingEnabled,
+                            fileSharingEnabled: peer.fileSharingEnabled
+                        )
+                        
+                        DispatchQueue.main.async {
+                            self.discoveredPeers[peer.hostname] = updatedPeer
+                            self.notifyNetworkDiscovery(peer: updatedPeer)
+                            Self.log("✅ Added peer '\(peer.hostname)' IP: \(ipAddress)")
+                        }
+                    }
                 }
+                
+                // Cancel connection after resolving
+                connection.cancel()
+                self.resolvingConnections.removeValue(forKey: peer.hostname)
+                
+            case .failed(let error):
+                Self.log("Failed to resolve IP for '\(peer.hostname)': \(error.localizedDescription)")
+                connection.cancel()
+                self.resolvingConnections.removeValue(forKey: peer.hostname)
+                
+            case .cancelled:
+                self.resolvingConnections.removeValue(forKey: peer.hostname)
+                
+            default:
+                break
             }
-            
-            let updatedPeer = PeerInfo(
-                hostname: peer.hostname,
-                ipAddress: ipAddress,
-                modelName: peer.modelName,
-                modelIdentifier: peer.modelIdentifier,
-                processorInfo: peer.processorInfo,
-                memoryGB: peer.memoryGB,
-                macOSVersion: peer.macOSVersion,
-                userName: peer.userName,
-                uptimeHours: peer.uptimeHours,
-                tidalDriftVersion: peer.tidalDriftVersion,
-                screenSharingEnabled: peer.screenSharingEnabled,
-                fileSharingEnabled: peer.fileSharingEnabled
+        }
+        
+        connection.start(queue: queue)
+        
+        // Timeout after 5 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            if self.resolvingConnections[peer.hostname] === connection {
+                Self.log("Timeout resolving IP for '\(peer.hostname)'")
+                connection.cancel()
+                self.resolvingConnections.removeValue(forKey: peer.hostname)
+            }
+        }
+    }
+    
+    private func handleRemovedService(_ result: NWBrowser.Result) {
+        guard case .service(let name, _, _, _) = result.endpoint else {
+            return
+        }
+        
+        Self.log("Service removed: '\(name)'")
+        
+        // Cancel any pending resolution
+        resolvingConnections[name]?.cancel()
+        resolvingConnections.removeValue(forKey: name)
+        
+        // Remove from discovered peers
+        DispatchQueue.main.async {
+            self.discoveredPeers.removeValue(forKey: name)
+        }
+    }
+    
+    private func parseTXTRecord(_ txtRecord: NWTXTRecord?, name: String) -> PeerInfo {
+        guard let txtRecord = txtRecord else {
+            return PeerInfo(
+                hostname: name,
+                ipAddress: "",
+                modelName: "Unknown",
+                modelIdentifier: "",
+                processorInfo: "",
+                memoryGB: 0,
+                macOSVersion: "",
+                userName: "",
+                uptimeHours: 0,
+                tidalDriftVersion: "",
+                screenSharingEnabled: false,
+                fileSharingEnabled: false
             )
-            
-            DispatchQueue.main.async {
-                self.discoveredPeers[name] = updatedPeer
-                self.notifyNetworkDiscovery(peer: updatedPeer)
-                Self.log("✅ Added peer '\(name)' IP: \(ipAddress.isEmpty ? "resolving" : ipAddress)")
-            }
-        } else {
-            Self.log("No TXT record for '\(name)'")
-        }
-    }
-    
-    private func extractIPAddress(from addressData: Data) -> String? {
-        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-        
-        let result = addressData.withUnsafeBytes { (pointer: UnsafeRawBufferPointer) -> Int32 in
-            guard let sockaddr = pointer.baseAddress?.assumingMemoryBound(to: sockaddr.self) else {
-                return -1
-            }
-            return getnameinfo(sockaddr, socklen_t(addressData.count),
-                             &hostname, socklen_t(hostname.count),
-                             nil, 0, NI_NUMERICHOST)
-        }
-        
-        if result == 0 {
-            let ip = String(cString: hostname)
-            // Skip IPv6 link-local addresses
-            if !ip.hasPrefix("fe80:") {
-                return ip
-            }
-        }
-        return nil
-    }
-    
-    private func parseTXTRecord(_ record: [String: Data], name: String) -> PeerInfo {
-        func getString(_ key: String) -> String {
-            if let data = record[key], let str = String(data: data, encoding: .utf8) {
-                return str
-            }
-            return ""
         }
         
         return PeerInfo(
             hostname: name,
             ipAddress: "",
-            modelName: getString("model").isEmpty ? "Unknown" : getString("model"),
-            modelIdentifier: getString("modelId"),
-            processorInfo: getString("cpu"),
-            memoryGB: Int(getString("mem")) ?? 0,
-            macOSVersion: getString("os"),
-            userName: getString("user"),
-            uptimeHours: Int(getString("uptime")) ?? 0,
-            tidalDriftVersion: getString("version"),
-            screenSharingEnabled: getString("screen") == "1",
-            fileSharingEnabled: getString("file") == "1"
+            modelName: txtRecord["model"]?.isEmpty == false ? txtRecord["model"]! : "Unknown",
+            modelIdentifier: txtRecord["modelId"] ?? "",
+            processorInfo: txtRecord["cpu"] ?? "",
+            memoryGB: Int(txtRecord["mem"] ?? "0") ?? 0,
+            macOSVersion: txtRecord["os"] ?? "",
+            userName: txtRecord["user"] ?? "",
+            uptimeHours: Int(txtRecord["uptime"] ?? "0") ?? 0,
+            tidalDriftVersion: txtRecord["version"] ?? "",
+            screenSharingEnabled: txtRecord["screen"] == "1",
+            fileSharingEnabled: txtRecord["file"] == "1"
         )
     }
     
@@ -356,71 +521,6 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     }
 }
 
-// MARK: - NetServiceDelegate
-
-extension TidalDriftPeerService: NetServiceDelegate {
-    func netServiceDidPublish(_ sender: NetService) {
-        Self.log("✅ NetService published: \(sender.name)")
-        DispatchQueue.main.async {
-            self.isAdvertising = true
-        }
-    }
-    
-    func netService(_ sender: NetService, didNotPublish errorDict: [String : NSNumber]) {
-        Self.log("❌ NetService failed to publish: \(errorDict)")
-    }
-    
-    func netServiceDidResolveAddress(_ sender: NetService) {
-        Self.log("NetService resolved: \(sender.name)")
-        processDiscoveredService(sender)
-    }
-    
-    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
-        Self.log("NetService failed to resolve: \(sender.name) - \(errorDict)")
-    }
-}
-
-// MARK: - NetServiceBrowserDelegate
-
-extension TidalDriftPeerService: NetServiceBrowserDelegate {
-    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
-        Self.log("Browser will search")
-    }
-    
-    func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
-        Self.log("Browser stopped search")
-    }
-    
-    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
-        Self.log("❌ Browser failed to search: \(errorDict)")
-    }
-    
-    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        Self.log("Found service: '\(service.name)' (more coming: \(moreComing))")
-        
-        // Skip ourselves
-        if service.name == localInfo.hostname {
-            Self.log("Skipping self")
-            return
-        }
-        
-        // Keep track of discovered services and resolve them
-        discoveredServices.append(service)
-        service.delegate = self
-        service.resolve(withTimeout: 5.0)
-    }
-    
-    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        Self.log("Service removed: '\(service.name)'")
-        discoveredServices.removeAll { $0.name == service.name }
-        
-        // Remove from discovered peers
-        DispatchQueue.main.async {
-            self.discoveredPeers.removeValue(forKey: service.name)
-        }
-    }
-}
-
 // MARK: - NetworkDiscoveryService Extension
 
 extension NetworkDiscoveryService {
@@ -494,4 +594,3 @@ extension NetworkDiscoveryService {
         }
     }
 }
-
