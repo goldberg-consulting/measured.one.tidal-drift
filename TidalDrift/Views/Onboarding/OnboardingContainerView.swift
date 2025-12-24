@@ -1,0 +1,129 @@
+import SwiftUI
+
+struct OnboardingContainerView: View {
+    @EnvironmentObject var appState: AppState
+    @StateObject private var viewModel = OnboardingViewModel()
+    
+    var body: some View {
+        ZStack {
+            backgroundGradient
+            
+            VStack(spacing: 0) {
+                progressIndicator
+                    .padding(.top, 40)
+                
+                Spacer()
+                
+                currentStepView
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .leading).combined(with: .opacity)
+                    ))
+                    .id(viewModel.currentStep)
+                
+                Spacer()
+                
+                navigationButtons
+                    .padding(.bottom, 40)
+            }
+            .padding(.horizontal, 60)
+        }
+        .frame(minWidth: 700, minHeight: 500)
+    }
+    
+    private var backgroundGradient: some View {
+        LinearGradient(
+            colors: [
+                Color(nsColor: .windowBackgroundColor),
+                Color(nsColor: .windowBackgroundColor).opacity(0.95)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+    }
+    
+    private var progressIndicator: some View {
+        HStack(spacing: 12) {
+            ForEach(OnboardingStep.allCases, id: \.self) { step in
+                Circle()
+                    .fill(step == viewModel.currentStep ? Color.accentColor : Color.secondary.opacity(0.3))
+                    .frame(width: 10, height: 10)
+                    .scaleEffect(step == viewModel.currentStep ? 1.2 : 1.0)
+                    .animation(.spring(response: 0.3), value: viewModel.currentStep)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var currentStepView: some View {
+        switch viewModel.currentStep {
+        case .welcome:
+            WelcomeStepView()
+        case .screenSharing:
+            ScreenSharingSetupView(viewModel: viewModel)
+        case .fileSharing:
+            FileSharingSetupView(viewModel: viewModel)
+        case .firewall:
+            FirewallSetupView(viewModel: viewModel)
+        case .completion:
+            CompletionStepView(viewModel: viewModel)
+        }
+    }
+    
+    private var navigationButtons: some View {
+        HStack {
+            if viewModel.currentStep != .welcome && viewModel.currentStep != .completion {
+                Button("Back") {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        viewModel.previousStep()
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            if viewModel.currentStep == .completion {
+                Button("Get Started") {
+                    withAnimation {
+                        appState.hasCompletedOnboarding = true
+                        NetworkDiscoveryService.shared.startBrowsing()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            } else if viewModel.canProceed {
+                Button(viewModel.currentStep == .welcome ? "Let's Go" : "Continue") {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        viewModel.nextStep()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            } else {
+                Button("Skip for Now") {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        viewModel.nextStep()
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+            }
+        }
+    }
+}
+
+enum OnboardingStep: Int, CaseIterable {
+    case welcome
+    case screenSharing
+    case fileSharing
+    case firewall
+    case completion
+}
+
+#Preview {
+    OnboardingContainerView()
+        .environmentObject(AppState.shared)
+}
