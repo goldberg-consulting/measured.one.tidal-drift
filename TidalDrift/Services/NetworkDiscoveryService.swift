@@ -11,35 +11,96 @@ class NetworkDiscoveryService: ObservableObject {
     private var browsers: [NWBrowser] = []
     private var deviceCache: [String: DiscoveredDevice] = [:]
     private var scanTimer: Timer?
+    private var pathMonitor: NWPathMonitor?
     private let queue = DispatchQueue(label: "com.tidaldrift.discovery", qos: .userInitiated)
     
+    // Extended service types for better discovery
     private let serviceTypes: [String] = [
-        "_rfb._tcp",
-        "_smb._tcp",
-        "_afpovertcp._tcp"
+        "_rfb._tcp",           // VNC/Screen Sharing
+        "_smb._tcp",           // Windows/Samba File Sharing
+        "_afpovertcp._tcp",    // AFP (Apple Filing Protocol)
+        "_ssh._tcp",           // SSH
+        "_net-assistant._udp", // Apple Remote Desktop
+        "_eppc._tcp",          // Remote Apple Events
+        "_device-info._tcp",   // Device Info
+        "_companion-link._tcp" // Continuity/Handoff
     ]
     
-    private init() {}
+    private init() {
+        setupNetworkMonitor()
+    }
+    
+    private func setupNetworkMonitor() {
+        pathMonitor = NWPathMonitor()
+        pathMonitor?.pathUpdateHandler = { [weak self] path in
+            if path.status == .satisfied {
+                // Network became available - refresh discovery
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    self?.refreshScan()
+                }
+            }
+        }
+        pathMonitor?.start(queue: queue)
+    }
     
     func startBrowsing() {
         guard browsers.isEmpty else { return }
         
         for serviceType in serviceTypes {
-            let browser = NWBrowser(for: .bonjour(type: serviceType, domain: "local."), using: .tcp)
+            // Use parameters that enable better discovery
+            let params = NWParameters()
+            params.includePeerToPeer = true
             
-            browser.stateUpdateHandler = { [weak self] state in
-                self?.handleBrowserState(state, for: serviceType)
+            // Try both local. domain and nil for broader discovery
+            for domain in ["local.", ""] {
+                let actualDomain = domain.isEmpty ? nil : domain
+                let browser = NWBrowser(for: .bonjour(type: serviceType, domain: actualDomain), using: params)
+                
+                browser.stateUpdateHandler = { [weak self] state in
+                    self?.handleBrowserState(state, for: serviceType)
+                }
+                
+                browser.browseResultsChangedHandler = { [weak self] results, changes in
+                    self?.handleBrowseResults(results, changes: changes, serviceType: serviceType)
+                }
+                
+                browser.start(queue: queue)
+                browsers.append(browser)
             }
-            
-            browser.browseResultsChangedHandler = { [weak self] results, changes in
-                self?.handleBrowseResults(results, changes: changes, serviceType: serviceType)
-            }
-            
-            browser.start(queue: queue)
-            browsers.append(browser)
         }
         
         lastScanDate = Date()
+        
+        // Also do an initial ARP scan to find devices that might not advertise services
+        Task {
+            await scanARPTable()
+        }
+    }
+    
+    /// Scan ARP table for additional devices that might not advertise Bonjour services
+    private func scanARPTable() async {
+        let result = ShellExecutor.execute("arp -a")
+        let lines = result.output.split(separator: "\n")
+        
+        for line in lines {
+            let lineStr = String(line)
+            
+            // Parse: "? (192.168.1.100) at aa:bb:cc:dd:ee:ff on en0"
+            if let ipRange = lineStr.range(of: "\\([0-9.]+\\)", options: .regularExpression) {
+                var ip = String(lineStr[ipRange])
+                ip = ip.trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+                
+                // Skip broadcast and self
+                if ip.hasSuffix(".255") || ip.hasSuffix(".1") { continue }
+                
+                // Check if we already know this device
+                let knownIPs = await MainActor.run { discoveredDevices.map { $0.ipAddress } }
+                if knownIPs.contains(ip) { continue }
+                
+                // Try to discover services on this IP
+                await scanIPForAllServices(ip)
+            }
+        }
     }
     
     func stopBrowsing() {
@@ -105,7 +166,10 @@ class NetworkDiscoveryService: ObservableObject {
     }
     
     private func resolveService(name: String, type: String, domain: String, serviceType: String) {
+        // Method 1: Use NWConnection to resolve
         let params = NWParameters.tcp
+        params.includePeerToPeer = true
+        
         let endpoint = NWEndpoint.service(name: name, type: type, domain: domain, interface: nil)
         let connection = NWConnection(to: endpoint, using: params)
         
@@ -117,6 +181,8 @@ class NetworkDiscoveryService: ObservableObject {
                 }
                 connection.cancel()
             case .failed:
+                // Try fallback resolution via dns-sd
+                self?.resolveServiceViaDNSSD(name: name, type: type, domain: domain, serviceType: serviceType)
                 connection.cancel()
             default:
                 break
@@ -125,8 +191,60 @@ class NetworkDiscoveryService: ObservableObject {
         
         connection.start(queue: queue)
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            connection.cancel()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if connection.state != .ready && connection.state != .cancelled {
+                // Timeout - try fallback
+                self.resolveServiceViaDNSSD(name: name, type: type, domain: domain, serviceType: serviceType)
+                connection.cancel()
+            }
+        }
+    }
+    
+    /// Fallback resolution using dns-sd command
+    private func resolveServiceViaDNSSD(name: String, type: String, domain: String, serviceType: String) {
+        // Use dns-sd to resolve the service
+        let escapedName = name.replacingOccurrences(of: "'", with: "'\\''")
+        let result = ShellExecutor.execute("timeout 2 dns-sd -L '\(escapedName)' \(type) \(domain) 2>/dev/null | head -5")
+        
+        // Parse output for host info
+        // Example: "hostname.local.:5900"
+        let lines = result.output.split(separator: "\n")
+        for line in lines {
+            let lineStr = String(line)
+            if lineStr.contains("can be reached at") {
+                // Extract hostname
+                if let hostRange = lineStr.range(of: "[a-zA-Z0-9-]+\\.local\\.", options: .regularExpression) {
+                    let hostname = String(lineStr[hostRange])
+                    // Resolve hostname to IP
+                    resolveHostname(hostname, name: name, serviceType: serviceType)
+                }
+            }
+        }
+    }
+    
+    /// Resolve a hostname to IP address
+    private func resolveHostname(_ hostname: String, name: String, serviceType: String) {
+        let cleanHostname = hostname.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        
+        var hints = addrinfo()
+        hints.ai_family = AF_INET // IPv4
+        hints.ai_socktype = SOCK_STREAM
+        
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(cleanHostname, nil, &hints, &result)
+        
+        defer { freeaddrinfo(result) }
+        
+        guard status == 0, let addrInfo = result else { return }
+        
+        var addr = addrInfo.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+        var ipBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        inet_ntop(AF_INET, &addr.sin_addr, &ipBuffer, socklen_t(INET_ADDRSTRLEN))
+        let ipAddress = String(cString: ipBuffer)
+        
+        let service = mapServiceType(serviceType)
+        DispatchQueue.main.async { [weak self] in
+            self?.addOrUpdateDevice(name: name, ipAddress: ipAddress, port: 5900, service: service)
         }
     }
     
