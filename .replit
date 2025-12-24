@@ -1,0 +1,9 @@
+entrypoint = "main.swift"
+
+modules = ["swift"]
+
+[nix]
+channel = "stable-24_05"
+
+[agent]
+expertMode = true
