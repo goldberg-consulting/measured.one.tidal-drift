@@ -20,12 +20,107 @@ struct SettingsView: View {
                     Label("Security", systemImage: "lock.shield")
                 }
             
+            MaintenanceSettingsView()
+                .tabItem {
+                    Label("Maintenance", systemImage: "wrench.and.screwdriver")
+                }
+            
             AboutView()
                 .tabItem {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 500, height: 400)
+        .frame(width: 550, height: 450)
+    }
+}
+
+struct MaintenanceSettingsView: View {
+    @State private var showCleanup = false
+    @State private var duplicateCount = 0
+    
+    var body: some View {
+        Form {
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundColor(.orange)
+                        Text("Installation Cleanup")
+                            .font(.headline)
+                    }
+                    
+                    Text("Find and remove duplicate TidalDrift installations to free up space and avoid confusion.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    HStack {
+                        if duplicateCount > 0 {
+                            Text("\(duplicateCount) duplicate(s) found")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                        
+                        Spacer()
+                        
+                        Button("Scan & Cleanup...") {
+                            showCleanup = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+            
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundColor(.blue)
+                        Text("Reset App")
+                            .font(.headline)
+                    }
+                    
+                    Text("Reset TidalDrift to its initial state. This will clear all settings and restart the onboarding process.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    HStack {
+                        Spacer()
+                        
+                        Button("Reset All Settings") {
+                            resetApp()
+                        }
+                        .buttonStyle(.bordered)
+                        .foregroundColor(.red)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+        }
+        .formStyle(.grouped)
+        .sheet(isPresented: $showCleanup) {
+            CleanupDuplicatesView()
+        }
+        .onAppear {
+            checkForDuplicates()
+        }
+    }
+    
+    private func checkForDuplicates() {
+        DispatchQueue.global(qos: .utility).async {
+            let count = InstallationCleanupService.shared.findAllInstallations().count
+            DispatchQueue.main.async {
+                duplicateCount = count
+            }
+        }
+    }
+    
+    private func resetApp() {
+        UserDefaults.standard.removePersistentDomain(forName: Bundle.main.bundleIdentifier ?? "")
+        UserDefaults.standard.synchronize()
+        
+        // Restart onboarding
+        AppState.shared.hasCompletedOnboarding = false
     }
 }
 
