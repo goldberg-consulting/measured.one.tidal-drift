@@ -1,17 +1,23 @@
 import SwiftUI
 
+enum DashboardSection: String, CaseIterable {
+    case devices = "Devices"
+    case appStreaming = "App Streaming"
+    case clipboardSync = "Clipboard Sync"
+    case troubleshooting = "Troubleshooting"
+}
+
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = DashboardViewModel()
     @ObservedObject private var discoveryService = NetworkDiscoveryService.shared
-    @State private var showAppStreaming = false
-    @State private var showClipboardSync = false
+    @State private var selectedSection: DashboardSection = .devices
     
     var body: some View {
         NavigationSplitView {
             sidebarContent
         } detail: {
-            mainContent
+            detailContent
         }
         .frame(minWidth: 900, minHeight: 600)
         .sheet(isPresented: $viewModel.showAddDeviceSheet) {
@@ -19,12 +25,6 @@ struct DashboardView: View {
         }
         .sheet(item: $viewModel.selectedDevice) { device in
             DeviceDetailSheet(device: device)
-        }
-        .sheet(isPresented: $showAppStreaming) {
-            AppStreamingView()
-        }
-        .sheet(isPresented: $showClipboardSync) {
-            ClipboardSyncView()
         }
         .onAppear {
             NetworkDiscoveryService.shared.startBrowsing()
@@ -37,10 +37,40 @@ struct DashboardView: View {
         }
     }
     
+    @ViewBuilder
+    private var detailContent: some View {
+        switch selectedSection {
+        case .devices:
+            mainContent
+        case .appStreaming:
+            AppStreamingTabView()
+        case .clipboardSync:
+            ClipboardSyncTabView()
+        case .troubleshooting:
+            TroubleshootingView()
+        }
+    }
+    
     private var sidebarContent: some View {
-        List {
+        List(selection: $selectedSection) {
             Section("This Mac") {
                 StatusCardView()
+            }
+            
+            Section("Navigation") {
+                Label("Devices", systemImage: "desktopcomputer")
+                    .tag(DashboardSection.devices)
+                
+                Label("App Streaming", systemImage: "app.connected.to.app.below.fill")
+                    .tag(DashboardSection.appStreaming)
+                    .badge(Text("β").foregroundColor(.orange))
+                
+                Label("Clipboard Sync", systemImage: "doc.on.clipboard")
+                    .tag(DashboardSection.clipboardSync)
+                    .badge(ClipboardSyncService.shared.isEnabled ? Text("●").foregroundColor(.green) : Text("β").foregroundColor(.orange))
+                
+                Label("Troubleshooting", systemImage: "wrench.and.screwdriver")
+                    .tag(DashboardSection.troubleshooting)
             }
             
             Section("Quick Actions") {
@@ -51,46 +81,11 @@ struct DashboardView: View {
                 }
                 
                 Button {
-                    // Open Finder to show iCloud devices in sidebar
                     NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app"))
                 } label: {
                     Label("iCloud Devices", systemImage: "icloud")
                 }
                 .help("Open Finder to see Macs on your iCloud account")
-            }
-            
-            Section("Experimental") {
-                Button {
-                    showAppStreaming = true
-                } label: {
-                    HStack {
-                        Label("App Streaming", systemImage: "app.connected.to.app.below.fill")
-                        Spacer()
-                        Image(systemName: "sparkles")
-                            .foregroundColor(.orange)
-                            .font(.caption)
-                    }
-                }
-                .help("Stream a single app instead of the full desktop")
-                
-                Button {
-                    showClipboardSync = true
-                } label: {
-                    HStack {
-                        Label("Clipboard Sync", systemImage: "doc.on.clipboard")
-                        Spacer()
-                        if ClipboardSyncService.shared.isEnabled {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 8, height: 8)
-                        } else {
-                            Image(systemName: "sparkles")
-                                .foregroundColor(.orange)
-                                .font(.caption)
-                        }
-                    }
-                }
-                .help("Share clipboard between Macs on your network")
             }
             
             if !appState.connectionHistory.isEmpty {
