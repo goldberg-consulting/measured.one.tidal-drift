@@ -3,8 +3,6 @@ import SwiftUI
 struct OnboardingContainerView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = OnboardingViewModel()
-    @StateObject private var healthService = PermissionHealthService.shared
-    @State private var isFinalizingSetup = false
     
     var body: some View {
         ZStack {
@@ -26,28 +24,6 @@ struct OnboardingContainerView: View {
                     .padding(.vertical, 24)
             }
             .padding(.horizontal, 50)
-            
-            // Overlay while finalizing setup
-            if isFinalizingSetup {
-                Color.black.opacity(0.5)
-                    .ignoresSafeArea()
-                
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("Finalizing Setup...")
-                        .font(.headline)
-                    Text("Verifying permissions and fixing any issues")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(32)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                        .shadow(radius: 20)
-                )
-            }
         }
         .frame(minWidth: 700, minHeight: 620)
     }
@@ -110,13 +86,13 @@ struct OnboardingContainerView: View {
             
             if viewModel.currentStep == .completion {
                 Button("Get Started") {
-                    Task {
-                        await finalizeSetup()
+                    withAnimation {
+                        appState.hasCompletedOnboarding = true
+                        NetworkDiscoveryService.shared.startBrowsing()
                     }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(isFinalizingSetup)
             } else if viewModel.canProceed {
                 Button(viewModel.currentStep == .welcome ? "Let's Go" : "Continue") {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
@@ -134,25 +110,6 @@ struct OnboardingContainerView: View {
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
             }
-        }
-    }
-    
-    @MainActor
-    private func finalizeSetup() async {
-        isFinalizingSetup = true
-        
-        // Run health check and auto-fix any stuck permissions
-        let _ = await healthService.performStartupHealthCheck()
-        
-        // Small delay for visual feedback
-        try? await Task.sleep(nanoseconds: 500_000_000)
-        
-        isFinalizingSetup = false
-        
-        // Complete onboarding
-        withAnimation {
-            AppState.shared.hasCompletedOnboarding = true
-            NetworkDiscoveryService.shared.startBrowsing()
         }
     }
 }

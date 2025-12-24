@@ -1,182 +1,127 @@
 import SwiftUI
 
 struct PermissionDiagnosticView: View {
-    @ObservedObject var diagnosticService = PermissionDiagnosticService.shared
-    @State private var showResetConfirmation = false
-    @State private var resetMessage: String?
-    @State private var hostnameConfig: PermissionDiagnosticService.HostnameConfig?
+    @StateObject private var healthService = PermissionHealthService.shared
+    @State private var showConfirmation = false
+    @State private var resultMessage: String?
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 24) {
                 headerSection
                 
-                statusCards
+                fixButtonSection
                 
-                hostnameSection
-                
-                if let result = diagnosticService.lastDiagnostic {
-                    issuesSection(result)
-                    recommendationsSection(result)
+                if let result = healthService.lastResetResult {
+                    resultSection(result)
                 }
                 
-                actionsSection
-                
                 explanationSection
+                
+                systemSettingsSection
             }
             .padding()
         }
-        .frame(minWidth: 500, minHeight: 550)
-        .onAppear {
-            Task {
-                await diagnosticService.runFullDiagnostic()
-                hostnameConfig = diagnosticService.checkHostnameConfiguration()
-            }
-        }
-        .alert("Reset Complete", isPresented: .constant(resetMessage != nil)) {
-            Button("OK") { resetMessage = nil }
-        } message: {
-            Text(resetMessage ?? "")
-        }
-        .alert("Reset All Permissions?", isPresented: $showResetConfirmation) {
-            Button("Reset", role: .destructive) {
+        .frame(minWidth: 500, minHeight: 450)
+        .alert("Fix All Permissions?", isPresented: $showConfirmation) {
+            Button("Fix Now", role: .destructive) {
                 Task {
-                    let success = await diagnosticService.resetAllPermissions()
-                    resetMessage = success 
-                        ? "Permissions reset. Please quit and restart TidalDrift."
-                        : "Reset failed. Try running from Terminal with admin privileges."
+                    let result = await healthService.fixAllPermissions()
+                    resultMessage = result.message
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This will reset all TidalDrift permissions. You'll need to grant them again after restarting the app.")
+            Text("This will:\n• Restart Screen Sharing service\n• Reset Screen Recording permission\n• Reset Local Network permission\n\nYou may need to re-grant permissions when prompted.")
         }
     }
     
     private var headerSection: some View {
-        HStack {
-            VStack(alignment: .leading) {
-                Text("Permission Diagnostic")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                
-                Text("Check and fix permission issues")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Fix Permission Issues")
+                .font(.title2)
+                .fontWeight(.bold)
             
-            Spacer()
-            
+            Text("Having trouble connecting? Permissions sometimes get \"stuck\" on macOS. Use the button below to reset them.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    private var fixButtonSection: some View {
+        VStack(alignment: .center, spacing: 16) {
             Button {
-                Task {
-                    await diagnosticService.runFullDiagnostic()
-                }
+                showConfirmation = true
             } label: {
-                if diagnosticService.isRunningDiagnostic {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                } else {
-                    Label("Run Diagnostic", systemImage: "stethoscope")
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(diagnosticService.isRunningDiagnostic)
-        }
-    }
-    
-    private var statusCards: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-            StatusCard(
-                title: "Screen Sharing",
-                subtitle: "Remote desktop service",
-                isEnabled: diagnosticService.screenSharingServiceRunning && diagnosticService.screenSharingPortOpen,
-                icon: "rectangle.on.rectangle",
-                action: {
-                    diagnosticService.openScreenSharingSettings()
-                }
-            )
-            
-            StatusCard(
-                title: "Screen Recording",
-                subtitle: "App capture permission",
-                isEnabled: diagnosticService.screenRecordingGranted,
-                icon: "video.fill",
-                action: {
-                    diagnosticService.openScreenRecordingSettings()
-                }
-            )
-        }
-    }
-    
-    private var hostnameSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Hostname & Bonjour")
-                    .font(.headline)
-                
-                Spacer()
-                
-                Button {
-                    diagnosticService.openHostnameSettings()
-                } label: {
-                    Label("Edit", systemImage: "pencil")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-            
-            if let config = hostnameConfig {
-                VStack(alignment: .leading, spacing: 8) {
-                    HostnameRow(
-                        label: "Computer Name",
-                        value: config.computerName,
-                        help: "Friendly name shown in Finder"
-                    )
-                    
-                    HostnameRow(
-                        label: "Local Hostname",
-                        value: "\(config.localHostname).local",
-                        help: "Used for Bonjour on local network"
-                    )
-                    
-                    if let globalHostname = config.hostname, !globalHostname.isEmpty {
-                        HostnameRow(
-                            label: "Dynamic Global Hostname",
-                            value: globalHostname,
-                            help: "For remote access via internet"
-                        )
+                HStack(spacing: 12) {
+                    if healthService.isResetting {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                    } else {
+                        Image(systemName: "wrench.and.screwdriver.fill")
+                            .font(.title2)
                     }
                     
-                    HStack {
-                        Text("Bonjour Domains")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Fix All Permission Issues")
+                            .font(.headline)
+                        Text("Resets Screen Sharing, Screen Recording, and Local Network")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        
-                        Spacer()
-                        
-                        ForEach(config.bonjourDomains, id: \.self) { domain in
-                            Text(domain)
-                                .font(.caption)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.accentColor.opacity(0.2)))
-                        }
-                    }
-                    
-                    if !config.wideAreaEnabled {
-                        HStack {
-                            Image(systemName: "info.circle")
-                                .foregroundColor(.blue)
-                            Text("Wide-Area Bonjour is not configured. This is only needed for access outside your local network.")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
                     }
                 }
-            } else {
-                Text("Loading hostname configuration...")
+                .frame(maxWidth: .infinity)
+                .padding()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .disabled(healthService.isResetting)
+            
+            if let message = resultMessage {
+                Text(message)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.green)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                    .onAppear {
+                        // Clear message after 10 seconds
+                        Task {
+                            try? await Task.sleep(nanoseconds: 10_000_000_000)
+                            resultMessage = nil
+                        }
+                    }
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.orange.opacity(0.1))
+        )
+    }
+    
+    @ViewBuilder
+    private func resultSection(_ result: PermissionHealthService.ResetResult) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Last Fix Attempt")
+                .font(.headline)
+            
+            Text("At \(result.timestamp.formatted(date: .abbreviated, time: .shortened))")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                ResultRow(
+                    label: "Screen Sharing Restarted",
+                    success: result.screenSharingRestarted
+                )
+                ResultRow(
+                    label: "Screen Recording Reset",
+                    success: result.screenRecordingReset
+                )
+                ResultRow(
+                    label: "Local Network Reset",
+                    success: result.localNetworkReset
+                )
             }
         }
         .padding()
@@ -186,135 +131,30 @@ struct PermissionDiagnosticView: View {
         )
     }
     
-    @ViewBuilder
-    private func issuesSection(_ result: PermissionDiagnosticService.DiagnosticResult) -> some View {
-        if !result.issues.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Issues Found")
-                    .font(.headline)
-                
-                ForEach(Array(result.issues.enumerated()), id: \.offset) { _, issue in
-                    IssueRow(issue: issue)
-                }
-            }
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.red.opacity(0.1))
-            )
-        }
-    }
-    
-    @ViewBuilder
-    private func recommendationsSection(_ result: PermissionDiagnosticService.DiagnosticResult) -> some View {
-        if !result.recommendations.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Recommendations")
-                    .font(.headline)
-                
-                ForEach(result.recommendations, id: \.self) { rec in
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "lightbulb.fill")
-                            .foregroundColor(.yellow)
-                        Text(rec)
-                            .font(.subheadline)
-                    }
-                }
-            }
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.blue.opacity(0.1))
-            )
-        }
-    }
-    
-    @State private var showScreenSharingFixAlert = false
-    
-    private var actionsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Quick Actions")
-                .font(.headline)
-            
-            HStack(spacing: 12) {
-                Button {
-                    showScreenSharingFixAlert = true
-                    diagnosticService.openScreenSharingSettings()
-                } label: {
-                    Label("Fix Screen Sharing", systemImage: "wrench.fill")
-                }
-                .buttonStyle(.bordered)
-                .alert("Fix Screen Sharing", isPresented: $showScreenSharingFixAlert) {
-                    Button("Done") {
-                        Task {
-                            await diagnosticService.runFullDiagnostic()
-                        }
-                    }
-                } message: {
-                    Text("""
-                    In System Settings:
-                    
-                    1. Turn OFF Screen Sharing
-                    2. Wait 3 seconds
-                    3. Turn ON Screen Sharing
-                    
-                    This fixes the "port not listening" issue.
-                    Click Done when complete.
-                    """)
-                }
-                
-                Button {
-                    Task {
-                        let success = await diagnosticService.resetScreenRecordingPermission()
-                        resetMessage = success
-                            ? "Screen Recording permission reset. Please quit and restart TidalDrift, then grant permission when prompted."
-                            : "Reset failed."
-                    }
-                } label: {
-                    Label("Reset Screen Recording", systemImage: "arrow.counterclockwise")
-                }
-                .buttonStyle(.bordered)
-                
-                Button(role: .destructive) {
-                    showResetConfirmation = true
-                } label: {
-                    Label("Reset All", systemImage: "trash")
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-    }
-    
     private var explanationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Why Permissions Get \"Sticky\"")
+            Text("Why This Happens")
                 .font(.headline)
             
             VStack(alignment: .leading, spacing: 8) {
                 ExplanationRow(
                     icon: "signature",
                     title: "Code Signature Changes",
-                    description: "When you rebuild the app, macOS may see it as a new app requiring fresh permissions."
+                    description: "Rebuilding the app can cause macOS to treat it as a new app."
                 )
                 
                 ExplanationRow(
                     icon: "memorychip",
-                    title: "Permission Caching",
-                    description: "macOS caches permissions in memory. Changes require quitting and restarting the app."
+                    title: "Cached Permissions",
+                    description: "macOS caches permissions. Sometimes they need a hard reset."
                 )
                 
                 ExplanationRow(
-                    icon: "doc.on.doc",
-                    title: "Multiple Installations",
-                    description: "Each TidalDrift copy has separate permissions. Remove duplicates in Settings → Maintenance."
+                    icon: "network",
+                    title: "Service States",
+                    description: "Screen Sharing can get into a stuck state where it's 'enabled' but not listening."
                 )
             }
-            
-            Divider()
-            
-            Text("**Quick Fix:** Quit TidalDrift completely → Reset permission → Restart → Grant when prompted")
-                .font(.caption)
-                .foregroundColor(.secondary)
         }
         .padding()
         .background(
@@ -322,82 +162,60 @@ struct PermissionDiagnosticView: View {
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
     }
-}
-
-struct StatusCard: View {
-    let title: String
-    let subtitle: String
-    let isEnabled: Bool
-    let icon: String
-    let action: () -> Void
     
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Image(systemName: icon)
-                    .font(.title2)
-                    .foregroundColor(isEnabled ? .green : .red)
-                    .frame(width: 40)
-                
-                VStack(alignment: .leading) {
-                    Text(title)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+    private var systemSettingsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Manual Settings")
+                .font(.headline)
+            
+            HStack(spacing: 12) {
+                Button {
+                    openSystemPreferences("x-apple.systempreferences:com.apple.preference.sharing")
+                } label: {
+                    Label("Sharing", systemImage: "rectangle.on.rectangle")
                 }
+                .buttonStyle(.bordered)
                 
-                Spacer()
+                Button {
+                    openSystemPreferences("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                } label: {
+                    Label("Screen Recording", systemImage: "video.fill")
+                }
+                .buttonStyle(.bordered)
                 
-                Image(systemName: isEnabled ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundColor(isEnabled ? .green : .red)
+                Button {
+                    openSystemPreferences("x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")
+                } label: {
+                    Label("Local Network", systemImage: "network")
+                }
+                .buttonStyle(.bordered)
             }
-            .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-            )
+            
+            Text("If fixing doesn't work, try manually toggling these settings off and on.")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
-        .buttonStyle(.plain)
+    }
+    
+    private func openSystemPreferences(_ url: String) {
+        if let url = URL(string: url) {
+            NSWorkspace.shared.open(url)
+        }
     }
 }
 
-struct IssueRow: View {
-    let issue: PermissionDiagnosticService.DiagnosticResult.Issue
-    
-    var severityColor: Color {
-        switch issue.severity {
-        case .critical: return .red
-        case .warning: return .orange
-        case .info: return .blue
-        }
-    }
+struct ResultRow: View {
+    let label: String
+    let success: Bool
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Circle()
-                    .fill(severityColor)
-                    .frame(width: 8, height: 8)
-                
-                Text(issue.category.rawValue)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(severityColor)
-            }
-            
-            Text(issue.description)
+        HStack {
+            Image(systemName: success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundColor(success ? .green : .red)
+            Text(label)
                 .font(.subheadline)
-            
-            if let fix = issue.fix {
-                Text("Fix: \(fix)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+            Spacer()
         }
-        .padding(.vertical, 4)
     }
 }
 
@@ -426,37 +244,8 @@ struct ExplanationRow: View {
     }
 }
 
-struct HostnameRow: View {
-    let label: String
-    let value: String
-    let help: String
-    
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                Text(value)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-            }
-            
-            Spacer()
-            
-            Text(help)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.trailing)
-        }
-        .padding(.vertical, 4)
-    }
-}
-
 struct PermissionDiagnosticView_Previews: PreviewProvider {
     static var previews: some View {
         PermissionDiagnosticView()
     }
 }
-
