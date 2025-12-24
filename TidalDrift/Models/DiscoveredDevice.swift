@@ -11,6 +11,21 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
     var savedCredentialRef: String?
     var port: Int
     
+    // TidalDrift peer info (if running on remote machine)
+    var isTidalDriftPeer: Bool
+    var peerModelName: String?
+    var peerModelIdentifier: String?
+    var peerProcessorInfo: String?
+    var peerMemoryGB: Int?
+    var peerMacOSVersion: String?
+    var peerUserName: String?
+    var peerUptimeHours: Int?
+    
+    /// Stable identifier based on name + IP for credential storage
+    var stableId: String {
+        "\(name.lowercased().replacingOccurrences(of: " ", with: "-"))_\(ipAddress)"
+    }
+    
     init(id: UUID = UUID(),
          name: String,
          hostname: String,
@@ -19,7 +34,15 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
          lastSeen: Date = Date(),
          isTrusted: Bool = false,
          savedCredentialRef: String? = nil,
-         port: Int = 5900) {
+         port: Int = 5900,
+         isTidalDriftPeer: Bool = false,
+         peerModelName: String? = nil,
+         peerModelIdentifier: String? = nil,
+         peerProcessorInfo: String? = nil,
+         peerMemoryGB: Int? = nil,
+         peerMacOSVersion: String? = nil,
+         peerUserName: String? = nil,
+         peerUptimeHours: Int? = nil) {
         self.id = id
         self.name = name
         self.hostname = hostname
@@ -29,6 +52,14 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
         self.isTrusted = isTrusted
         self.savedCredentialRef = savedCredentialRef
         self.port = port
+        self.isTidalDriftPeer = isTidalDriftPeer
+        self.peerModelName = peerModelName
+        self.peerModelIdentifier = peerModelIdentifier
+        self.peerProcessorInfo = peerProcessorInfo
+        self.peerMemoryGB = peerMemoryGB
+        self.peerMacOSVersion = peerMacOSVersion
+        self.peerUserName = peerUserName
+        self.peerUptimeHours = peerUptimeHours
     }
     
     enum ServiceType: String, Codable, CaseIterable {

@@ -83,21 +83,23 @@ struct LoadingIndicator: View {
     }
 }
 
-#Preview {
-    VStack(spacing: 20) {
-        HStack(spacing: 20) {
-            StatusIndicator(isOnline: true)
-            StatusIndicator(isOnline: false)
-            StatusIndicator(isOnline: true, size: 16)
+struct StatusIndicator_Previews: PreviewProvider {
+    static var previews: some View {
+        VStack(spacing: 20) {
+            HStack(spacing: 20) {
+                StatusIndicator(isOnline: true)
+                StatusIndicator(isOnline: false)
+                StatusIndicator(isOnline: true, size: 16)
+            }
+            
+            HStack(spacing: 20) {
+                PulsingCircle(color: .green)
+                PulsingCircle(color: .blue)
+                PulsingCircle(color: .orange)
+            }
+            
+            LoadingIndicator()
         }
-        
-        HStack(spacing: 20) {
-            PulsingCircle(color: .green)
-            PulsingCircle(color: .blue)
-            PulsingCircle(color: .orange)
-        }
-        
-        LoadingIndicator()
+        .padding()
     }
-    .padding()
 }

@@ -13,7 +13,6 @@ class AppState: ObservableObject {
     @Published var discoveredDevices: [DiscoveredDevice] = []
     @Published var trustedDevices: [UUID] = []
     @Published var connectionHistory: [ConnectionRecord] = []
-    @Published var isScanning: Bool = false
     @Published var settings: AppSettings
     
     @Published var screenSharingEnabled: Bool = false
@@ -35,10 +34,6 @@ class AppState: ObservableObject {
         NetworkDiscoveryService.shared.$discoveredDevices
             .receive(on: DispatchQueue.main)
             .assign(to: &$discoveredDevices)
-        
-        NetworkDiscoveryService.shared.$isScanning
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$isScanning)
         
         $settings
             .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
@@ -106,5 +101,10 @@ class AppState: ObservableObject {
            let history = try? JSONDecoder().decode([ConnectionRecord].self, from: data) {
             connectionHistory = history
         }
+    }
+    
+    func clearConnectionHistory() {
+        connectionHistory.removeAll()
+        UserDefaults.standard.removeObject(forKey: "connectionHistory")
     }
 }

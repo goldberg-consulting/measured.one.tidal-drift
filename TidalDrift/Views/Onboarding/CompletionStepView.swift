@@ -5,14 +5,21 @@ struct CompletionStepView: View {
     @State private var isAnimating = false
     
     var body: some View {
-        VStack(spacing: 32) {
+        VStack(spacing: 24) {
             successIcon
             
-            VStack(spacing: 16) {
-                Text("You're All Set!")
+            VStack(spacing: 12) {
+                Text("You're Ready!")
                     .font(.system(size: 36, weight: .bold, design: .rounded))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.green, .mint],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                 
-                Text("TidalDrift is ready to discover and connect to other Macs")
+                Text("TidalDrift is configured and ready to connect")
                     .font(.title3)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -21,6 +28,24 @@ struct CompletionStepView: View {
             statusSummary
             
             connectionInfo
+            
+            Spacer()
+            
+            // Branding footer
+            VStack(spacing: 4) {
+                Text("Thank you for using TidalDrift")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "building.2")
+                        .font(.caption2)
+                    Text("Goldberg Consulting, LLC")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                }
+                .foregroundColor(.secondary)
+            }
+            .opacity(isAnimating ? 1 : 0)
         }
         .onAppear {
             withAnimation(.spring(response: 0.6, dampingFraction: 0.6)) {
@@ -39,11 +64,11 @@ struct CompletionStepView: View {
                         endPoint: .bottomTrailing
                     )
                 )
-                .frame(width: 100, height: 100)
+                .frame(width: 90, height: 90)
                 .shadow(color: .green.opacity(0.4), radius: 20, x: 0, y: 10)
             
             Image(systemName: "checkmark")
-                .font(.system(size: 50, weight: .bold))
+                .font(.system(size: 40, weight: .bold))
                 .foregroundColor(.white)
         }
         .scaleEffect(isAnimating ? 1 : 0)
@@ -52,12 +77,12 @@ struct CompletionStepView: View {
     
     private var statusSummary: some View {
         VStack(spacing: 12) {
-            StatusRow(
+            OnboardingStatusRow(
                 title: "Screen Sharing",
                 isEnabled: viewModel.screenSharingEnabled
             )
             
-            StatusRow(
+            OnboardingStatusRow(
                 title: "File Sharing",
                 isEnabled: viewModel.fileSharingEnabled
             )
@@ -105,7 +130,7 @@ struct CompletionStepView: View {
     }
 }
 
-struct StatusRow: View {
+struct OnboardingStatusRow: View {
     let title: String
     let isEnabled: Bool
     
@@ -129,7 +154,9 @@ struct StatusRow: View {
     }
 }
 
-#Preview {
-    CompletionStepView(viewModel: OnboardingViewModel())
-        .frame(width: 600, height: 500)
+struct CompletionStepView_Previews: PreviewProvider {
+    static var previews: some View {
+        CompletionStepView(viewModel: OnboardingViewModel())
+            .frame(width: 600, height: 500)
+    }
 }

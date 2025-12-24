@@ -51,15 +51,18 @@ struct GeneralSettingsView: View {
             }
             
             Section {
-                Button("Reset Onboarding") {
+                Button {
                     appState.hasCompletedOnboarding = false
+                } label: {
+                    Label("Run Setup Wizard Again", systemImage: "arrow.counterclockwise")
                 }
                 
-                Button("Reset All Settings") {
+                Button(role: .destructive) {
                     SettingsService.shared.resetToDefaults()
                     appState.settings = .default
+                } label: {
+                    Label("Reset All Settings", systemImage: "trash")
                 }
-                .foregroundColor(.red)
             }
         }
         .formStyle(.grouped)
@@ -215,48 +218,85 @@ struct AboutView: View {
     var body: some View {
         VStack(spacing: 24) {
             VStack(spacing: 12) {
-                Image(systemName: "water.waves")
-                    .font(.system(size: 60))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.blue, .cyan, .teal],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.0, green: 0.5, blue: 0.9),
+                                    Color(red: 0.0, green: 0.3, blue: 0.7)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
+                        .frame(width: 80, height: 80)
+                        .shadow(color: .blue.opacity(0.3), radius: 10, x: 0, y: 5)
+                    
+                    Image(systemName: "display.2")
+                        .font(.system(size: 35, weight: .medium))
+                        .foregroundColor(.white)
+                }
                 
                 Text("TidalDrift")
                     .font(.title)
                     .fontWeight(.bold)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.blue, .cyan],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                 
                 Text("Version 1.0.0")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
             
-            Text("Mac-to-Mac network sharing made simple. Discover, connect, and share with other Macs on your local network.")
-                .font(.body)
-                .multilineTextAlignment(.center)
-                .foregroundColor(.secondary)
-                .padding(.horizontal)
-            
             VStack(spacing: 8) {
-                Link("Documentation", destination: URL(string: "https://github.com/tidaldrift/docs")!)
-                Link("Report an Issue", destination: URL(string: "https://github.com/tidaldrift/issues")!)
+                Text("VPN & VNET Screen Sharing Made Simple")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Text("Built for internal corporate networks where screen sharing typically stinks. Discover, connect, and share with other Macs instantly.")
+                    .font(.body)
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
             }
-            .font(.subheadline)
             
             Spacer()
             
-            Text("Made with love for the Mac community")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            // Goldberg Consulting branding
+            VStack(spacing: 8) {
+                Divider()
+                    .padding(.horizontal, 40)
+                
+                VStack(spacing: 4) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "building.2")
+                            .font(.caption)
+                        Text("Developed by")
+                            .font(.caption)
+                    }
+                    .foregroundColor(.secondary)
+                    
+                    Text("Goldberg Consulting, LLC")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                }
+                .padding(.top, 8)
+            }
         }
         .padding(40)
     }
 }
 
-#Preview {
-    SettingsView()
-        .environmentObject(AppState.shared)
+struct SettingsView_Previews: PreviewProvider {
+    static var previews: some View {
+        SettingsView()
+            .environmentObject(AppState.shared)
+    }
 }

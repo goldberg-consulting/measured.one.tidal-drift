@@ -84,7 +84,6 @@ struct MenuBarView: View {
                 }
             }
             .buttonStyle(.plain)
-            .disabled(appState.isScanning)
             
             Button {
                 if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "") {
@@ -163,7 +162,9 @@ struct MenuBarDeviceRow: View {
     }
 }
 
-#Preview {
-    MenuBarView()
-        .environmentObject(AppState.shared)
+struct MenuBarView_Previews: PreviewProvider {
+    static var previews: some View {
+        MenuBarView()
+            .environmentObject(AppState.shared)
+    }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 class SharingConfigurationService: ObservableObject {
     static let shared = SharingConfigurationService()
@@ -22,10 +23,13 @@ class SharingConfigurationService: ObservableObject {
     }
     
     func isScreenSharingEnabled() async -> Bool {
-        return await withCheckedContinuation { continuation in
+        // Try multiple methods to detect screen sharing status
+        
+        // Method 1: Check if screensharing service is loaded via launchctl print
+        let method1 = await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            task.arguments = ["list", "com.apple.screensharing"]
+            task.arguments = ["print", "system/com.apple.screensharing"]
             
             let pipe = Pipe()
             task.standardOutput = pipe
@@ -39,13 +43,52 @@ class SharingConfigurationService: ObservableObject {
                 continuation.resume(returning: false)
             }
         }
+        
+        if method1 { return true }
+        
+        // Method 2: Check via system_profiler
+        return await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
+            task.arguments = ["SPConfigurationProfileDataType", "-json"]
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = Pipe()
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                
+                // Also check if the VNC port is listening
+                let netstatTask = Process()
+                netstatTask.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+                netstatTask.arguments = ["-i", ":5900", "-sTCP:LISTEN"]
+                
+                let netstatPipe = Pipe()
+                netstatTask.standardOutput = netstatPipe
+                netstatTask.standardError = Pipe()
+                
+                try netstatTask.run()
+                netstatTask.waitUntilExit()
+                
+                let data = netstatPipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                continuation.resume(returning: !output.isEmpty)
+            } catch {
+                continuation.resume(returning: false)
+            }
+        }
     }
     
     func isFileSharingEnabled() async -> Bool {
-        return await withCheckedContinuation { continuation in
+        // Try multiple methods to detect file sharing status
+        
+        // Method 1: Check if smbd service is loaded
+        let method1 = await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            task.arguments = ["list", "com.apple.smbd"]
+            task.arguments = ["print", "system/com.apple.smbd"]
             
             let pipe = Pipe()
             task.standardOutput = pipe
@@ -55,6 +98,30 @@ class SharingConfigurationService: ObservableObject {
                 try task.run()
                 task.waitUntilExit()
                 continuation.resume(returning: task.terminationStatus == 0)
+            } catch {
+                continuation.resume(returning: false)
+            }
+        }
+        
+        if method1 { return true }
+        
+        // Method 2: Check if SMB port 445 is listening
+        return await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+            task.arguments = ["-i", ":445", "-sTCP:LISTEN"]
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = Pipe()
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                continuation.resume(returning: !output.isEmpty)
             } catch {
                 continuation.resume(returning: false)
             }
@@ -83,6 +150,105 @@ class SharingConfigurationService: ObservableObject {
             }
         }
     }
+    
+    func isFirewallEnabled() async -> Bool {
+        return await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/libexec/ApplicationFirewall/socketfilterfw")
+            task.arguments = ["--getglobalstate"]
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = Pipe()
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                // Output is "Firewall is enabled. (State = 1)" or "Firewall is disabled. (State = 0)"
+                continuation.resume(returning: output.lowercased().contains("enabled"))
+            } catch {
+                continuation.resume(returning: false)
+            }
+        }
+    }
+    
+    func isFirewallBlockingAll() async -> Bool {
+        return await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/libexec/ApplicationFirewall/socketfilterfw")
+            task.arguments = ["--getblockall"]
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = Pipe()
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                continuation.resume(returning: output.lowercased().contains("enabled"))
+            } catch {
+                continuation.resume(returning: false)
+            }
+        }
+    }
+    
+    // MARK: - Toggle Sharing Services
+    
+    func toggleScreenSharing(enable: Bool) async -> Bool {
+        let script: String
+        if enable {
+            script = """
+            do shell script "launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist" with administrator privileges
+            """
+        } else {
+            script = """
+            do shell script "launchctl unload -w /System/Library/LaunchDaemons/com.apple.screensharing.plist" with administrator privileges
+            """
+        }
+        
+        return await runAppleScript(script)
+    }
+    
+    func toggleFileSharing(enable: Bool) async -> Bool {
+        let script: String
+        if enable {
+            script = """
+            do shell script "launchctl load -w /System/Library/LaunchDaemons/com.apple.smbd.plist" with administrator privileges
+            """
+        } else {
+            script = """
+            do shell script "launchctl unload -w /System/Library/LaunchDaemons/com.apple.smbd.plist" with administrator privileges
+            """
+        }
+        
+        return await runAppleScript(script)
+    }
+    
+    private func runAppleScript(_ source: String) async -> Bool {
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var error: NSDictionary?
+                if let script = NSAppleScript(source: source) {
+                    script.executeAndReturnError(&error)
+                    if error == nil {
+                        continuation.resume(returning: true)
+                    } else {
+                        continuation.resume(returning: false)
+                    }
+                } else {
+                    continuation.resume(returning: false)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Open Settings
     
     func openScreenSharingSettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.sharing?Services_ScreenSharing")!

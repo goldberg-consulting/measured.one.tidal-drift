@@ -110,4 +110,12 @@ class DashboardViewModel: ObservableObject {
         NetworkDiscoveryService.shared.addManualDevice(name: name, ipAddress: ipAddress)
         showAddDeviceSheet = false
     }
+    
+    func scanSpecificIP(_ ipAddress: String) async {
+        await NetworkDiscoveryService.shared.scanIPForAllServices(ipAddress)
+    }
+    
+    func scanSubnet(baseIP: String) async {
+        await NetworkDiscoveryService.shared.scanSubnet(baseIP: baseIP)
+    }
 }

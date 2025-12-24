@@ -88,13 +88,15 @@ struct DeviceListRowView: View {
     }
 }
 
-#Preview {
-    VStack {
-        DeviceGridView(devices: DiscoveredDevice.previewList, onSelect: { _ in })
-        
-        Divider()
-        
-        DeviceListView(devices: DiscoveredDevice.previewList, onSelect: { _ in })
+struct DeviceGridView_Previews: PreviewProvider {
+    static var previews: some View {
+        VStack {
+            DeviceGridView(devices: DiscoveredDevice.previewList, onSelect: { _ in })
+            
+            Divider()
+            
+            DeviceListView(devices: DiscoveredDevice.previewList, onSelect: { _ in })
+        }
+        .padding()
     }
-    .padding()
 }

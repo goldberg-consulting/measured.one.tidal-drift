@@ -1,37 +1,26 @@
 import SwiftUI
-import UserNotifications
+import AppKit
 
-class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        setupNotifications()
         configureAppearance()
+        // Auto-start network discovery for screen shares
+        NetworkDiscoveryService.shared.startBrowsing()
+        // Start TidalDrift peer discovery (advertise + discover other instances)
+        PeerDiscoveryService.shared.start()
     }
     
     func applicationWillTerminate(_ notification: Notification) {
         NetworkDiscoveryService.shared.stopBrowsing()
+        PeerDiscoveryService.shared.stop()
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
     
-    private func setupNotifications() {
-        UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error = error {
-                print("Notification authorization error: \(error.localizedDescription)")
-            }
-        }
-    }
-    
     private func configureAppearance() {
         NSWindow.allowsAutomaticWindowTabbing = false
-    }
-    
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                willPresent notification: UNNotification,
-                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .sound])
     }
 }

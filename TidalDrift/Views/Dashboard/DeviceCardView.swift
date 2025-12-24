@@ -8,24 +8,38 @@ struct DeviceCardView: View {
     @State private var isPressed = false
     
     var body: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [.accentColor.opacity(0.2), .accentColor.opacity(0.1)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+        VStack(spacing: 10) {
+            // Device icon with TidalDrift badge
+            ZStack(alignment: .bottomTrailing) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: device.isTidalDriftPeer 
+                                    ? [.blue.opacity(0.3), .purple.opacity(0.2)]
+                                    : [.accentColor.opacity(0.2), .accentColor.opacity(0.1)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
-                    .frame(width: 60, height: 60)
+                        .frame(width: 56, height: 56)
+                    
+                    Image(systemName: device.deviceIcon)
+                        .font(.system(size: 26))
+                        .foregroundColor(device.isTidalDriftPeer ? .blue : .accentColor)
+                }
                 
-                Image(systemName: device.deviceIcon)
-                    .font(.system(size: 28))
-                    .foregroundColor(.accentColor)
+                // TidalDrift peer badge
+                if device.isTidalDriftPeer {
+                    Image(systemName: "wave.3.right.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.blue)
+                        .background(Circle().fill(Color(nsColor: .controlBackgroundColor)).padding(-2))
+                        .offset(x: 4, y: 4)
+                }
             }
             
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
                 Text(device.name)
                     .font(.headline)
                     .lineLimit(1)
@@ -34,12 +48,49 @@ struct DeviceCardView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
+                
+                // Show model info for TidalDrift peers
+                if device.isTidalDriftPeer, let model = device.peerModelName, !model.isEmpty {
+                    Text(model)
+                        .font(.caption2)
+                        .foregroundColor(.blue)
+                        .lineLimit(1)
+                }
             }
             
-            HStack(spacing: 6) {
+            // Service badges
+            HStack(spacing: 4) {
                 ForEach(Array(device.services), id: \.self) { service in
                     ServiceBadge(service: service)
                 }
+                
+                if device.isTidalDriftPeer {
+                    TidalDriftBadge()
+                }
+            }
+            
+            // Extra info for TidalDrift peers (on hover)
+            if device.isTidalDriftPeer && isHovering {
+                VStack(spacing: 2) {
+                    if let processor = device.peerProcessorInfo, !processor.isEmpty {
+                        Text(processor)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                    if let memory = device.peerMemoryGB, memory > 0,
+                       let macOS = device.peerMacOSVersion, !macOS.isEmpty {
+                        Text("\(memory)GB RAM • macOS \(macOS)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    if let user = device.peerUserName, !user.isEmpty {
+                        Text("User: \(user)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
             
             HStack(spacing: 6) {
@@ -56,13 +107,17 @@ struct DeviceCardView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
         }
-        .padding(16)
-        .frame(minWidth: 160, maxWidth: 200)
+        .padding(14)
+        .frame(minWidth: 170, maxWidth: 220)
         .background(
             RoundedRectangle(cornerRadius: 16)
                 .fill(Color(nsColor: .controlBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(device.isTidalDriftPeer ? Color.blue.opacity(0.3) : Color.clear, lineWidth: 2)
+                )
                 .shadow(
-                    color: isHovering ? .accentColor.opacity(0.2) : .black.opacity(0.1),
+                    color: isHovering ? (device.isTidalDriftPeer ? .blue.opacity(0.3) : .accentColor.opacity(0.2)) : .black.opacity(0.1),
                     radius: isHovering ? 12 : 6,
                     x: 0,
                     y: isHovering ? 6 : 3
@@ -72,7 +127,9 @@ struct DeviceCardView: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
         .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isPressed)
         .onHover { hovering in
-            isHovering = hovering
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
         }
         .onTapGesture {
             withAnimation {
@@ -85,6 +142,22 @@ struct DeviceCardView: View {
                 onTap()
             }
         }
+    }
+}
+
+struct TidalDriftBadge: View {
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "wave.3.right")
+                .font(.system(size: 8))
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(
+            Capsule()
+                .fill(Color.blue.opacity(0.2))
+        )
+        .foregroundColor(.blue)
     }
 }
 
@@ -106,10 +179,12 @@ struct ServiceBadge: View {
     }
 }
 
-#Preview {
-    HStack {
-        DeviceCardView(device: .preview) {}
-        DeviceCardView(device: DiscoveredDevice.previewList[2]) {}
+struct DeviceCardView_Previews: PreviewProvider {
+    static var previews: some View {
+        HStack {
+            DeviceCardView(device: .preview) {}
+            DeviceCardView(device: DiscoveredDevice.previewList[2]) {}
+        }
+        .padding()
     }
-    .padding()
 }

@@ -37,7 +37,7 @@ class SettingsService {
                     try SMAppService.mainApp.unregister()
                 }
             } catch {
-                print("Failed to set launch at login: \(error)")
+                // Failed to set launch at login - requires app to be in Applications folder
             }
         }
     }

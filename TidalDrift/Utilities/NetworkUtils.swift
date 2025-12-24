@@ -130,18 +130,11 @@ struct NetworkUtils {
     }
     
     static func getCurrentWiFiSSID() -> String? {
-        guard let interfaces = CNCopySupportedInterfaces() as? [String] else {
+        // Use CoreWLAN for macOS WiFi SSID detection
+        guard let interface = CWWiFiClient.shared().interface() else {
             return nil
         }
-        
-        for interface in interfaces {
-            guard let info = CNCopyCurrentNetworkInfo(interface as CFString) as? [String: Any] else {
-                continue
-            }
-            return info[kCNNetworkInfoKeySSID as String] as? String
-        }
-        
-        return nil
+        return interface.ssid()
     }
     
     static func isNetworkAvailable() -> Bool {

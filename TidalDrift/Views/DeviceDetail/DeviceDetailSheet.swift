@@ -22,6 +22,8 @@ struct DeviceDetailSheet: View {
                     
                     servicesSection
                     
+                    peerInfoSection
+                    
                     credentialsSection
                     
                     if !viewModel.connectionHistory.isEmpty {
@@ -198,6 +200,67 @@ struct DeviceDetailSheet: View {
         )
     }
     
+    @ViewBuilder
+    private var peerInfoSection: some View {
+        if device.isTidalDriftPeer {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "wave.3.right.circle.fill")
+                        .foregroundColor(.blue)
+                    Text("TidalDrift Peer")
+                        .font(.headline)
+                    Spacer()
+                    Text("Enhanced Info")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.blue.opacity(0.1)))
+                }
+                
+                Divider()
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    if let model = device.peerModelName, !model.isEmpty {
+                        PeerInfoRow(label: "Model", value: model, icon: "desktopcomputer")
+                    }
+                    
+                    if let processor = device.peerProcessorInfo, !processor.isEmpty {
+                        PeerInfoRow(label: "Processor", value: processor, icon: "cpu")
+                    }
+                    
+                    if let memory = device.peerMemoryGB, memory > 0 {
+                        PeerInfoRow(label: "Memory", value: "\(memory) GB RAM", icon: "memorychip")
+                    }
+                    
+                    if let macOS = device.peerMacOSVersion, !macOS.isEmpty {
+                        PeerInfoRow(label: "macOS", value: macOS, icon: "applelogo")
+                    }
+                    
+                    if let user = device.peerUserName, !user.isEmpty {
+                        PeerInfoRow(label: "User", value: user, icon: "person")
+                    }
+                    
+                    if let uptime = device.peerUptimeHours, uptime > 0 {
+                        let days = uptime / 24
+                        let hours = uptime % 24
+                        let uptimeStr = days > 0 ? "\(days)d \(hours)h" : "\(hours)h"
+                        PeerInfoRow(label: "Uptime", value: uptimeStr, icon: "clock")
+                    }
+                }
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.blue.opacity(0.05))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                    )
+            )
+        }
+    }
+    
     private var credentialsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -304,6 +367,33 @@ struct ConnectButton: View {
     }
 }
 
-#Preview {
-    DeviceDetailSheet(device: .preview)
+struct PeerInfoRow: View {
+    let label: String
+    let value: String
+    let icon: String
+    
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .foregroundColor(.blue)
+                .frame(width: 20)
+            
+            Text(label)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .frame(width: 80, alignment: .leading)
+            
+            Text(value)
+                .font(.subheadline)
+                .lineLimit(1)
+            
+            Spacer()
+        }
+    }
+}
+
+struct DeviceDetailSheet_Previews: PreviewProvider {
+    static var previews: some View {
+        DeviceDetailSheet(device: .preview)
+    }
 }

@@ -3,6 +3,7 @@ import SwiftUI
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = DashboardViewModel()
+    @ObservedObject private var discoveryService = NetworkDiscoveryService.shared
     
     var body: some View {
         NavigationSplitView {
@@ -36,23 +37,31 @@ struct DashboardView: View {
             
             Section("Quick Actions") {
                 Button {
-                    viewModel.refreshScan()
-                } label: {
-                    Label("Scan Network", systemImage: "arrow.clockwise")
-                }
-                .disabled(appState.isScanning)
-                
-                Button {
                     viewModel.showAddDeviceSheet = true
                 } label: {
                     Label("Add Device", systemImage: "plus")
                 }
+                
+                Button {
+                    // Open Finder to show iCloud devices in sidebar
+                    NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app"))
+                } label: {
+                    Label("iCloud Devices", systemImage: "icloud")
+                }
+                .help("Open Finder to see Macs on your iCloud account")
             }
             
             if !appState.connectionHistory.isEmpty {
                 Section("Recent") {
                     ForEach(appState.connectionHistory.prefix(5)) { record in
                         RecentConnectionRow(record: record)
+                    }
+                    
+                    Button(role: .destructive) {
+                        appState.clearConnectionHistory()
+                    } label: {
+                        Label("Clear History", systemImage: "trash")
+                            .foregroundColor(.red)
                     }
                 }
             }
@@ -74,36 +83,73 @@ struct DashboardView: View {
     }
     
     private var toolbar: some View {
-        HStack {
-            TextField("Search devices...", text: $viewModel.searchText)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 250)
-            
-            Spacer()
-            
-            if appState.isScanning {
-                ProgressView()
-                    .scaleEffect(0.7)
-                    .padding(.trailing, 8)
-            }
-            
-            Picker("Sort", selection: $viewModel.sortOrder) {
-                ForEach(DashboardViewModel.SortOrder.allCases, id: \.self) { order in
-                    Text(order.displayName).tag(order)
+        VStack(spacing: 0) {
+            HStack {
+                TextField("Search devices...", text: $viewModel.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 250)
+                
+                Spacer()
+                
+                // Scan Subnet button - prominent
+                Button {
+                    Task {
+                        await viewModel.scanSubnet(baseIP: NetworkUtils.getLocalIPAddress() ?? "192.168.1.1")
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if discoveryService.isScanningSubnet {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                        } else {
+                            Image(systemName: "network")
+                        }
+                        Text("Scan Subnet")
+                    }
                 }
-            }
-            .pickerStyle(.menu)
-            .frame(width: 120)
-            
-            Picker("View", selection: $viewModel.viewMode) {
-                ForEach(DashboardViewModel.ViewMode.allCases, id: \.self) { mode in
-                    Image(systemName: mode.icon).tag(mode)
+                .buttonStyle(.borderedProminent)
+                .disabled(discoveryService.isScanningSubnet)
+                
+                Divider()
+                    .frame(height: 20)
+                    .padding(.horizontal, 8)
+                
+                Picker("Sort", selection: $viewModel.sortOrder) {
+                    ForEach(DashboardViewModel.SortOrder.allCases, id: \.self) { order in
+                        Text(order.displayName).tag(order)
+                    }
                 }
+                .pickerStyle(.menu)
+                .frame(minWidth: 130)
+                
+                Divider()
+                    .frame(height: 20)
+                    .padding(.horizontal, 8)
+                
+                Picker("View", selection: $viewModel.viewMode) {
+                    ForEach(DashboardViewModel.ViewMode.allCases, id: \.self) { mode in
+                        Image(systemName: mode.icon).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 80)
+                .labelsHidden()
             }
-            .pickerStyle(.segmented)
-            .frame(width: 80)
+            .padding()
+            
+            // Subnet scan progress bar
+            if discoveryService.isScanningSubnet {
+                VStack(spacing: 4) {
+                    ProgressView(value: discoveryService.scanProgress)
+                        .progressViewStyle(.linear)
+                    Text("Scanning network for devices... \(Int(discoveryService.scanProgress * 100))%")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+            }
         }
-        .padding()
         .background(Color(nsColor: .windowBackgroundColor))
     }
     
@@ -181,7 +227,9 @@ struct RecentConnectionRow: View {
     }
 }
 
-#Preview {
-    DashboardView()
-        .environmentObject(AppState.shared)
+struct DashboardView_Previews: PreviewProvider {
+    static var previews: some View {
+        DashboardView()
+            .environmentObject(AppState.shared)
+    }
 }

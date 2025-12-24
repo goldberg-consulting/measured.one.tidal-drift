@@ -13,7 +13,7 @@ let package = Package(
         .executableTarget(
             name: "TidalDrift",
             path: ".",
-            exclude: ["Resources", "TidalDrift.entitlements", "Info.plist", "Package.swift"],
+            exclude: ["TidalDrift.entitlements", "Info.plist", "Package.swift", "build-app.sh", "TidalDrift.app"],
             sources: [
                 "App",
                 "Views",
@@ -23,7 +23,8 @@ let package = Package(
                 "Utilities"
             ],
             resources: [
-                .process("Resources")
+                .copy("Resources/AppIcon.icns"),
+                .process("Resources/Assets.xcassets")
             ]
         )
     ]

@@ -3,14 +3,17 @@ import SwiftUI
 struct ScreenSharingSetupView: View {
     @ObservedObject var viewModel: OnboardingViewModel
     @State private var isChecking = false
+    @State private var isToggling = false
     
     var body: some View {
-        VStack(spacing: 32) {
+        VStack(spacing: 24) {
             headerSection
             
-            statusSection
+            toggleSection
             
-            instructionsSection
+            if !viewModel.screenSharingEnabled {
+                manualInstructions
+            }
         }
         .onAppear {
             checkStatus()
@@ -18,9 +21,9 @@ struct ScreenSharingSetupView: View {
     }
     
     private var headerSection: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             Image(systemName: "rectangle.on.rectangle")
-                .font(.system(size: 60))
+                .font(.system(size: 50))
                 .foregroundStyle(
                     LinearGradient(
                         colors: [.blue, .purple],
@@ -29,75 +32,110 @@ struct ScreenSharingSetupView: View {
                     )
                 )
             
-            Text("Enable Screen Sharing")
-                .font(.system(size: 28, weight: .bold, design: .rounded))
+            Text("Screen Sharing")
+                .font(.system(size: 26, weight: .bold, design: .rounded))
             
             Text("Allow other Macs to view and control your screen")
-                .font(.body)
+                .font(.callout)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
         }
     }
     
-    private var statusSection: some View {
-        HStack(spacing: 12) {
-            if isChecking {
-                ProgressView()
-                    .scaleEffect(0.8)
-                Text("Checking status...")
-                    .foregroundColor(.secondary)
-            } else if viewModel.screenSharingEnabled {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(.green)
-                Text("Screen Sharing is enabled")
-                    .foregroundColor(.green)
-            } else {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundColor(.orange)
-                Text("Screen Sharing is not enabled")
-                    .foregroundColor(.orange)
+    private var toggleSection: some View {
+        VStack(spacing: 16) {
+            // Main toggle card
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Screen Sharing")
+                        .font(.headline)
+                    Text(viewModel.screenSharingEnabled ? "Other Macs can connect to your screen" : "Enable to allow remote connections")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                if isToggling || isChecking {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                } else {
+                    Toggle("", isOn: Binding(
+                        get: { viewModel.screenSharingEnabled },
+                        set: { _ in toggleScreenSharing() }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                }
             }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(viewModel.screenSharingEnabled ? Color.green.opacity(0.5) : Color.clear, lineWidth: 2)
+                    )
+            )
+            
+            // Status indicator
+            if viewModel.screenSharingEnabled {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text("Screen Sharing is enabled")
+                        .font(.subheadline)
+                        .foregroundColor(.green)
+                }
+            }
+            
+            Text("Requires administrator password")
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 24)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
     }
     
-    private var instructionsSection: some View {
-        VStack(spacing: 20) {
-            if !viewModel.screenSharingEnabled {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("How to enable:")
-                        .font(.headline)
-                    
-                    InstructionStep(number: 1, text: "Click the button below to open System Settings")
-                    InstructionStep(number: 2, text: "Navigate to General → Sharing")
-                    InstructionStep(number: 3, text: "Toggle on \"Screen Sharing\"")
-                    InstructionStep(number: 4, text: "Come back here and click \"Check Again\"")
-                }
-                .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                )
-                
-                HStack(spacing: 16) {
-                    Button("Open System Settings") {
-                        SharingConfigurationService.shared.openSharingPreferences()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    
-                    Button("Check Again") {
-                        checkStatus()
-                    }
-                    .buttonStyle(.bordered)
+    private var manualInstructions: some View {
+        VStack(spacing: 12) {
+            Text("Or enable manually:")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            Button("Open System Settings") {
+                SharingConfigurationService.shared.openSharingPreferences()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            
+            Button("Check Again") {
+                checkStatus()
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundColor(.accentColor)
+        }
+    }
+    
+    private func toggleScreenSharing() {
+        isToggling = true
+        let newState = !viewModel.screenSharingEnabled
+        
+        Task {
+            let success = await SharingConfigurationService.shared.toggleScreenSharing(enable: newState)
+            
+            // Wait a moment for the service to start/stop
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            
+            await MainActor.run {
+                isToggling = false
+                if success {
+                    viewModel.screenSharingEnabled = newState
+                    viewModel.updateCanProceed()
                 }
             }
+            
+            // Verify the actual state
+            checkStatus()
         }
     }
     
@@ -133,7 +171,9 @@ struct InstructionStep: View {
     }
 }
 
-#Preview {
-    ScreenSharingSetupView(viewModel: OnboardingViewModel())
-        .frame(width: 600, height: 500)
+struct ScreenSharingSetupView_Previews: PreviewProvider {
+    static var previews: some View {
+        ScreenSharingSetupView(viewModel: OnboardingViewModel())
+            .frame(width: 600, height: 500)
+    }
 }

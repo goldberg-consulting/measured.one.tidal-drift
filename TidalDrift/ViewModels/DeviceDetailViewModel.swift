@@ -23,7 +23,7 @@ class DeviceDetailViewModel: ObservableObject {
     }
     
     var hasCredentials: Bool {
-        KeychainService.shared.hasCredential(for: device.id.uuidString)
+        KeychainService.shared.hasCredential(for: device.stableId)
     }
     
     var connectionHistory: [ConnectionRecord] {
@@ -36,7 +36,7 @@ class DeviceDetailViewModel: ObservableObject {
     }
     
     func loadSavedCredentials() {
-        if let credentials = try? KeychainService.shared.getCredential(for: device.id.uuidString) {
+        if let credentials = try? KeychainService.shared.getCredential(for: device.stableId) {
             username = credentials.username
             password = credentials.password
         }
@@ -45,7 +45,7 @@ class DeviceDetailViewModel: ObservableObject {
     func saveCredentialsIfNeeded() {
         if saveCredentials && !username.isEmpty {
             try? KeychainService.shared.saveCredential(
-                for: device.id.uuidString,
+                for: device.stableId,
                 username: username,
                 password: password
             )
@@ -53,7 +53,7 @@ class DeviceDetailViewModel: ObservableObject {
     }
     
     func deleteCredentials() {
-        try? KeychainService.shared.deleteCredential(for: device.id.uuidString)
+        try? KeychainService.shared.deleteCredential(for: device.stableId)
         username = ""
         password = ""
     }
@@ -68,10 +68,12 @@ class DeviceDetailViewModel: ObservableObject {
             switch service {
             case .screenSharing:
                 let usernameToUse = username.isEmpty ? nil : username
+                let passwordToUse = password.isEmpty ? nil : password
                 try await ScreenShareConnectionService.shared.connect(
                     to: device,
                     mode: connectionMode,
-                    username: usernameToUse
+                    username: usernameToUse,
+                    password: passwordToUse
                 )
             case .fileSharing:
                 let usernameToUse = username.isEmpty ? nil : username

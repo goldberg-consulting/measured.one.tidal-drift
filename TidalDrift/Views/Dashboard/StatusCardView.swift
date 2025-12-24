@@ -3,6 +3,8 @@ import SwiftUI
 struct StatusCardView: View {
     @EnvironmentObject var appState: AppState
     @State private var showQRCode: Bool = false
+    @State private var isTogglingScreen: Bool = false
+    @State private var isTogglingFile: Bool = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -23,15 +25,21 @@ struct StatusCardView: View {
             Divider()
             
             VStack(spacing: 8) {
-                StatusRow(
+                SharingToggleRow(
                     label: "Screen Sharing",
-                    isEnabled: appState.screenSharingEnabled
-                )
+                    isEnabled: appState.screenSharingEnabled,
+                    isToggling: isTogglingScreen
+                ) {
+                    toggleScreenSharing()
+                }
                 
-                StatusRow(
+                SharingToggleRow(
                     label: "File Sharing",
-                    isEnabled: appState.fileSharingEnabled
-                )
+                    isEnabled: appState.fileSharingEnabled,
+                    isToggling: isTogglingFile
+                ) {
+                    toggleFileSharing()
+                }
             }
             
             Divider()
@@ -57,7 +65,7 @@ struct StatusCardView: View {
             }
             
             HStack(spacing: 8) {
-                Button("Configure") {
+                Button("System Settings") {
                     SharingConfigurationService.shared.openSharingPreferences()
                 }
                 .buttonStyle(.bordered)
@@ -86,6 +94,74 @@ struct StatusCardView: View {
     private func copyIPAddress() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(appState.localIPAddress, forType: .string)
+    }
+    
+    private func toggleScreenSharing() {
+        isTogglingScreen = true
+        let newState = !appState.screenSharingEnabled
+        
+        Task {
+            let success = await SharingConfigurationService.shared.toggleScreenSharing(enable: newState)
+            await MainActor.run {
+                isTogglingScreen = false
+                if success {
+                    appState.screenSharingEnabled = newState
+                }
+                // Refresh to get actual state
+                Task {
+                    await appState.checkSharingStatus()
+                }
+            }
+        }
+    }
+    
+    private func toggleFileSharing() {
+        isTogglingFile = true
+        let newState = !appState.fileSharingEnabled
+        
+        Task {
+            let success = await SharingConfigurationService.shared.toggleFileSharing(enable: newState)
+            await MainActor.run {
+                isTogglingFile = false
+                if success {
+                    appState.fileSharingEnabled = newState
+                }
+                // Refresh to get actual state
+                Task {
+                    await appState.checkSharingStatus()
+                }
+            }
+        }
+    }
+}
+
+struct SharingToggleRow: View {
+    let label: String
+    let isEnabled: Bool
+    let isToggling: Bool
+    let onToggle: () -> Void
+    
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+            
+            Spacer()
+            
+            if isToggling {
+                ProgressView()
+                    .scaleEffect(0.6)
+                    .frame(width: 40)
+            } else {
+                Toggle("", isOn: Binding(
+                    get: { isEnabled },
+                    set: { _ in onToggle() }
+                ))
+                .toggleStyle(.switch)
+                .scaleEffect(0.7)
+                .frame(width: 40)
+            }
+        }
     }
 }
 
@@ -167,9 +243,11 @@ struct QRCodeSheet: View {
     }
 }
 
-#Preview {
-    StatusCardView()
-        .environmentObject(AppState.shared)
-        .frame(width: 250)
-        .padding()
+struct StatusCardView_Previews: PreviewProvider {
+    static var previews: some View {
+        StatusCardView()
+            .environmentObject(AppState.shared)
+            .frame(width: 250)
+            .padding()
+    }
 }

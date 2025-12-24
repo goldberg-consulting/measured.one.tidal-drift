@@ -2,6 +2,33 @@ import Foundation
 
 struct ShellExecutor {
     
+    // MARK: - Input Sanitization
+    
+    /// Sanitize input to prevent shell injection attacks
+    private static func sanitizeForShell(_ input: String) -> String {
+        // Only allow alphanumeric, dots, hyphens, underscores, and colons
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_:"))
+        return input.unicodeScalars.filter { allowedCharacters.contains($0) }.map { String($0) }.joined()
+    }
+    
+    /// Validate IP address format
+    private static func isValidIPAddress(_ ip: String) -> Bool {
+        let parts = ip.split(separator: ".")
+        guard parts.count == 4 else { return false }
+        return parts.allSatisfy { part in
+            guard let num = Int(part) else { return false }
+            return num >= 0 && num <= 255
+        }
+    }
+    
+    /// Validate hostname format
+    private static func isValidHostname(_ hostname: String) -> Bool {
+        let pattern = "^[a-zA-Z0-9]([a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9\\-]{0,61}[a-zA-Z0-9])?)*$"
+        return hostname.range(of: pattern, options: .regularExpression) != nil
+    }
+    
+    // MARK: - Execution
+    
     @discardableResult
     static func execute(_ command: String, arguments: [String] = []) -> (output: String, exitCode: Int32) {
         let task = Process()
@@ -39,14 +66,21 @@ struct ShellExecutor {
         }
     }
     
+    /// Execute with sudo - NOTE: This function is deprecated and should not be used with user input
+    /// Only use with hardcoded, trusted commands
+    @available(*, deprecated, message: "Use AppleScript with administrator privileges instead")
     static func executeWithSudo(_ command: String, password: String) -> (output: String, exitCode: Int32) {
+        // This is inherently insecure - prefer using AppleScript with admin privileges
         let escapedPassword = password.replacingOccurrences(of: "'", with: "'\\''")
         let sudoCommand = "echo '\(escapedPassword)' | sudo -S \(command)"
         return execute(sudoCommand)
     }
     
     static func checkCommandExists(_ command: String) -> Bool {
-        let result = execute("which \(command)")
+        // Sanitize command name to prevent injection
+        let safeCommand = sanitizeForShell(command)
+        guard !safeCommand.isEmpty else { return false }
+        let result = execute("which \(safeCommand)")
         return result.exitCode == 0 && !result.output.isEmpty
     }
     
@@ -61,11 +95,19 @@ struct ShellExecutor {
     }
     
     static func ping(_ host: String, count: Int = 1, timeout: Int = 2) -> Bool {
-        let result = execute("ping -c \(count) -t \(timeout) \(host)")
+        // Validate host to prevent command injection
+        guard isValidIPAddress(host) || isValidHostname(host) else {
+            return false
+        }
+        let safeHost = sanitizeForShell(host)
+        let result = execute("ping -c \(count) -t \(timeout) \(safeHost)")
         return result.exitCode == 0
     }
     
     static func openSystemPreference(_ pane: String) {
-        execute("open 'x-apple.systempreferences:\(pane)'")
+        // Sanitize pane name
+        let safePane = sanitizeForShell(pane)
+        guard !safePane.isEmpty else { return }
+        execute("open 'x-apple.systempreferences:\(safePane)'")
     }
 }

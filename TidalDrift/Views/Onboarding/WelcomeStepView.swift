@@ -4,21 +4,54 @@ struct WelcomeStepView: View {
     @State private var isAnimating = false
     
     var body: some View {
-        VStack(spacing: 32) {
+        VStack(spacing: 20) {
             appIcon
             
-            VStack(spacing: 16) {
-                Text("Welcome to TidalDrift")
-                    .font(.system(size: 36, weight: .bold, design: .rounded))
+            VStack(spacing: 10) {
+                Text("TidalDrift")
+                    .font(.system(size: 38, weight: .bold, design: .rounded))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.blue, .cyan],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
                 
-                Text("Your gateway to seamless Mac-to-Mac connectivity")
+                Text("VPN & VNET Screen Sharing Made Simple")
                     .font(.title3)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                
+                Text("Finally, a tool that makes internal network screen sharing not stink.")
+                    .font(.callout)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
             }
             
             featuresList
+            
+            // Branding footer
+            VStack(spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "building.2")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text("Designed by")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Text("Goldberg Consulting, LLC")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+            }
+            .padding(.top, 8)
+            .opacity(isAnimating ? 1 : 0)
         }
+        .padding(.vertical, 16)
         .onAppear {
             withAnimation(.easeOut(duration: 0.8)) {
                 isAnimating = true
@@ -28,54 +61,57 @@ struct WelcomeStepView: View {
     
     private var appIcon: some View {
         ZStack {
+            // Main circle
             Circle()
                 .fill(
                     LinearGradient(
-                        colors: [.blue, .cyan, .teal],
+                        colors: [
+                            Color(red: 0.0, green: 0.5, blue: 0.9),
+                            Color(red: 0.0, green: 0.3, blue: 0.7)
+                        ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .frame(width: 120, height: 120)
-                .shadow(color: .blue.opacity(0.4), radius: 20, x: 0, y: 10)
+                .frame(width: 80, height: 80)
+                .shadow(color: .blue.opacity(0.4), radius: 15, x: 0, y: 8)
             
-            Image(systemName: "water.waves")
-                .font(.system(size: 50, weight: .medium))
+            // Icon
+            Image(systemName: "display.2")
+                .font(.system(size: 32, weight: .medium))
                 .foregroundColor(.white)
-                .rotationEffect(.degrees(isAnimating ? 0 : -10))
-                .animation(.easeInOut(duration: 2).repeatForever(autoreverses: true), value: isAnimating)
         }
         .scaleEffect(isAnimating ? 1 : 0.8)
         .opacity(isAnimating ? 1 : 0)
     }
     
     private var featuresList: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 10) {
+            FeatureRow(
+                icon: "network",
+                title: "VPN & VNET Ready",
+                description: "Designed for internal corporate networks"
+            )
+            
             FeatureRow(
                 icon: "rectangle.on.rectangle",
-                title: "Screen Sharing",
-                description: "View and control other Macs on your network"
+                title: "One-Click Screen Sharing",
+                description: "Connect to any Mac on your network instantly"
             )
             
             FeatureRow(
-                icon: "folder",
-                title: "File Sharing",
-                description: "Share files seamlessly between your devices"
-            )
-            
-            FeatureRow(
-                icon: "wifi",
+                icon: "bolt.fill",
                 title: "Auto Discovery",
-                description: "Automatically find Macs on your local network"
+                description: "No manual IP addresses needed"
             )
             
             FeatureRow(
-                icon: "lock.shield",
-                title: "Secure & Private",
-                description: "All connections stay on your local network"
+                icon: "lock.shield.fill",
+                title: "Secure & Local",
+                description: "All traffic stays on your network"
             )
         }
-        .padding(.top, 24)
+        .padding(.top, 12)
         .opacity(isAnimating ? 1 : 0)
         .offset(y: isAnimating ? 0 : 20)
     }
@@ -87,25 +123,28 @@ struct FeatureRow: View {
     let description: String
     
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.title2)
+                .font(.body)
                 .foregroundColor(.accentColor)
-                .frame(width: 32)
+                .frame(width: 24)
             
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.headline)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
                 
                 Text(description)
-                    .font(.subheadline)
+                    .font(.caption)
                     .foregroundColor(.secondary)
             }
         }
     }
 }
 
-#Preview {
-    WelcomeStepView()
-        .frame(width: 600, height: 500)
+struct WelcomeStepView_Previews: PreviewProvider {
+    static var previews: some View {
+        WelcomeStepView()
+            .frame(width: 600, height: 500)
+    }
 }

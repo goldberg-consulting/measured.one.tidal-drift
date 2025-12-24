@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
-    @State private var showOnboarding: Bool = false
     
     var body: some View {
         Group {
@@ -15,11 +14,15 @@ struct ContentView: View {
         .onAppear {
             appState.loadTrustedDevices()
             appState.loadConnectionHistory()
+            // Auto-start network discovery
+            NetworkDiscoveryService.shared.startBrowsing()
         }
     }
 }
 
-#Preview {
-    ContentView()
-        .environmentObject(AppState.shared)
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+            .environmentObject(AppState.shared)
+    }
 }

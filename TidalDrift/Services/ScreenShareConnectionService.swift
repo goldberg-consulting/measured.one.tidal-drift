@@ -6,6 +6,7 @@ enum ConnectionError: LocalizedError {
     case connectionFailed
     case authenticationFailed
     case timeout
+    case scriptError(String)
     case unknown(Error)
     
     var errorDescription: String? {
@@ -18,6 +19,8 @@ enum ConnectionError: LocalizedError {
             return "Authentication failed"
         case .timeout:
             return "Connection timed out"
+        case .scriptError(let message):
+            return "Script error: \(message)"
         case .unknown(let error):
             return error.localizedDescription
         }
@@ -34,26 +37,104 @@ class ScreenShareConnectionService {
     
     private init() {}
     
-    func connect(to device: DiscoveredDevice, mode: ScreenShareMode = .control, username: String? = nil) async throws {
-        let urlString: String
-        
-        if let username = username {
-            urlString = "vnc://\(username)@\(device.ipAddress):\(device.port)"
+    func connect(to device: DiscoveredDevice, mode: ScreenShareMode = .control, username: String? = nil, password: String? = nil) async throws {
+        // If we have both username and password, use AppleScript to connect with credentials
+        if let username = username, !username.isEmpty,
+           let password = password, !password.isEmpty {
+            try await connectWithCredentials(to: device.ipAddress, port: device.port, username: username, password: password)
         } else {
-            urlString = "vnc://\(device.ipAddress):\(device.port)"
+            // Otherwise, just open the VNC URL and let Screen Sharing handle auth
+            let urlString: String
+            
+            if let username = username, !username.isEmpty {
+                urlString = "vnc://\(username)@\(device.ipAddress):\(device.port)"
+            } else {
+                urlString = "vnc://\(device.ipAddress):\(device.port)"
+            }
+            
+            guard let url = URL(string: urlString) else {
+                throw ConnectionError.invalidAddress
+            }
+            
+            let success = await MainActor.run {
+                NSWorkspace.shared.open(url)
+            }
+            
+            if !success {
+                throw ConnectionError.connectionFailed
+            }
         }
-        
-        guard let url = URL(string: urlString) else {
+    }
+    
+    /// Connect using AppleScript to pass credentials directly to Screen Sharing
+    private func connectWithCredentials(to ipAddress: String, port: Int, username: String, password: String) async throws {
+        // Validate IP address format to prevent injection
+        guard isValidIPAddress(ipAddress) else {
             throw ConnectionError.invalidAddress
         }
         
-        let success = await MainActor.run {
-            NSWorkspace.shared.open(url)
+        // Escape special characters for AppleScript string
+        let escapedUsername = escapeForAppleScript(username)
+        let escapedPassword = escapeForAppleScript(password)
+        
+        // Build VNC URL with properly escaped credentials
+        let vncURL = "vnc://\(escapedUsername):\(escapedPassword)@\(ipAddress):\(port)"
+        
+        // Use AppleScript to open the connection
+        let script = """
+        tell application "Screen Sharing"
+            activate
+            open location "\(vncURL)"
+        end tell
+        """
+        
+        let result = await MainActor.run { () -> (Bool, String?) in
+            var error: NSDictionary?
+            if let appleScript = NSAppleScript(source: script) {
+                appleScript.executeAndReturnError(&error)
+                if let error = error {
+                    return (false, error[NSAppleScript.errorMessage] as? String)
+                }
+                return (true, nil)
+            }
+            return (false, "Failed to create AppleScript")
         }
         
-        if !success {
-            throw ConnectionError.connectionFailed
+        if !result.0 {
+            // Fall back to URL method (without password - macOS will prompt)
+            let escapedUsernameForURL = username.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? username
+            let urlString = "vnc://\(escapedUsernameForURL)@\(ipAddress):\(port)"
+            guard let url = URL(string: urlString) else {
+                throw ConnectionError.invalidAddress
+            }
+            
+            let success = await MainActor.run {
+                NSWorkspace.shared.open(url)
+            }
+            
+            if !success {
+                throw ConnectionError.connectionFailed
+            }
         }
+    }
+    
+    /// Validate IP address format
+    private func isValidIPAddress(_ ip: String) -> Bool {
+        let parts = ip.split(separator: ".")
+        guard parts.count == 4 else { return false }
+        return parts.allSatisfy { part in
+            guard let num = Int(part) else { return false }
+            return num >= 0 && num <= 255
+        }
+    }
+    
+    /// Escape string for safe use in AppleScript
+    private func escapeForAppleScript(_ string: String) -> String {
+        return string
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\r", with: "")
     }
     
     func connectWithScreenSharingApp(to device: DiscoveredDevice) throws {
@@ -63,10 +144,8 @@ class ScreenShareConnectionService {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.arguments = [device.ipAddress]
         
-        NSWorkspace.shared.openApplication(at: screenSharingURL, configuration: configuration) { app, error in
-            if let error = error {
-                print("Failed to open Screen Sharing: \(error.localizedDescription)")
-            }
+        NSWorkspace.shared.openApplication(at: screenSharingURL, configuration: configuration) { _, _ in
+            // Connection handled by Screen Sharing app
         }
     }
     

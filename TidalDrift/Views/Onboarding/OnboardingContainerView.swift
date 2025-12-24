@@ -10,25 +10,22 @@ struct OnboardingContainerView: View {
             
             VStack(spacing: 0) {
                 progressIndicator
-                    .padding(.top, 40)
-                
-                Spacer()
+                    .padding(.top, 24)
                 
                 currentStepView
+                    .frame(maxHeight: .infinity)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .leading).combined(with: .opacity)
                     ))
                     .id(viewModel.currentStep)
                 
-                Spacer()
-                
                 navigationButtons
-                    .padding(.bottom, 40)
+                    .padding(.vertical, 24)
             }
-            .padding(.horizontal, 60)
+            .padding(.horizontal, 50)
         }
-        .frame(minWidth: 700, minHeight: 500)
+        .frame(minWidth: 700, minHeight: 620)
     }
     
     private var backgroundGradient: some View {
@@ -123,7 +120,9 @@ enum OnboardingStep: Int, CaseIterable {
     case completion
 }
 
-#Preview {
-    OnboardingContainerView()
-        .environmentObject(AppState.shared)
+struct OnboardingContainerView_Previews: PreviewProvider {
+    static var previews: some View {
+        OnboardingContainerView()
+            .environmentObject(AppState.shared)
+    }
 }
