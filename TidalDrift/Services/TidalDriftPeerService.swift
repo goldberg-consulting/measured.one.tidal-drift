@@ -2,6 +2,7 @@ import Foundation
 import Network
 import IOKit
 import os.log
+import Combine
 
 /// Service to advertise this TidalDrift instance and discover peers
 /// Uses Network.framework for modern, reliable Bonjour discovery
@@ -37,6 +38,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     private var listener: NWListener?
     private var browser: NWBrowser?
     private let queue = DispatchQueue(label: "com.tidaldrift.peer.network", qos: .userInitiated)
+    private var cancellables = Set<AnyCancellable>()
     
     private let serviceType = "_tidaldrift._tcp"
     private let deviceName = Host.current().localizedName ?? "TidalDrift"
@@ -83,6 +85,26 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         Self.log("Local hostname: \(hostname)")
         Self.log("Local IP: \(ipAddress)")
         Self.log("Service Type: \(serviceType)")
+        
+        setupSettingsBinding()
+    }
+    
+    private func setupSettingsBinding() {
+        AppState.shared.$settings
+            .map { $0.peerDiscoveryEnabled }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                Self.log("Peer discovery setting changed: \(enabled)")
+                if enabled {
+                    self?.startAdvertising()
+                    self?.startDiscovery()
+                } else {
+                    self?.stopAdvertising()
+                    self?.stopDiscovery()
+                }
+            }
+            .store(in: &cancellables)
     }
     
     // MARK: - Advertising (Network.framework)

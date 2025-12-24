@@ -44,15 +44,10 @@ struct StatusCardView: View {
                     Text("Peer Discovery")
                         .font(.caption)
                     Spacer()
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(TidalDriftPeerService.shared.isAdvertising ? Color.green : Color.orange)
-                            .frame(width: 6, height: 6)
-                        Text(TidalDriftPeerService.shared.isAdvertising ? "Active" : "Off")
-                            .font(.caption)
-                            .foregroundColor(TidalDriftPeerService.shared.isAdvertising ? .green : .orange)
-                    }
-                    .frame(width: 40, alignment: .leading)
+                    Toggle("", isOn: $appState.settings.peerDiscoveryEnabled)
+                        .toggleStyle(.switch)
+                        .scaleEffect(0.7)
+                        .frame(width: 40)
                 }
             }
             

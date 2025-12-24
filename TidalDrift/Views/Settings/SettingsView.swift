@@ -203,6 +203,9 @@ struct NetworkSettingsView: View {
     var body: some View {
         Form {
             Section("Discovery") {
+                Toggle("Enable Peer Discovery", isOn: $appState.settings.peerDiscoveryEnabled)
+                    .help("Allows other TidalDrift instances to find this Mac and vice versa.")
+                
                 Picker("Scan interval", selection: $appState.settings.scanIntervalSeconds) {
                     ForEach(AppSettings.scanIntervalOptions, id: \.self) { interval in
                         Text(AppSettings.scanIntervalDisplayName(for: interval)).tag(interval)

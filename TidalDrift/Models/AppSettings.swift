@@ -8,6 +8,7 @@ struct AppSettings: Codable, Equatable {
     var enableConnectionLogging: Bool
     var showMenuBarIcon: Bool
     var autoConnectTrustedDevices: Bool
+    var peerDiscoveryEnabled: Bool
     var theme: AppTheme
     
     // Wake-on-LAN settings
@@ -23,6 +24,7 @@ struct AppSettings: Codable, Equatable {
          enableConnectionLogging: Bool = true,
          showMenuBarIcon: Bool = true,
          autoConnectTrustedDevices: Bool = false,
+         peerDiscoveryEnabled: Bool = true,
          theme: AppTheme = .system,
          wakeOnLANEnabled: Bool = true,
          wakeOnLANPort: Int = 9,
@@ -35,6 +37,7 @@ struct AppSettings: Codable, Equatable {
         self.enableConnectionLogging = enableConnectionLogging
         self.showMenuBarIcon = showMenuBarIcon
         self.autoConnectTrustedDevices = autoConnectTrustedDevices
+        self.peerDiscoveryEnabled = peerDiscoveryEnabled
         self.theme = theme
         self.wakeOnLANEnabled = wakeOnLANEnabled
         self.wakeOnLANPort = wakeOnLANPort
