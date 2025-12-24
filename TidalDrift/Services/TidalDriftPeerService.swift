@@ -1,18 +1,46 @@
 import Foundation
 import Network
 import IOKit
+import os.log
 
 /// Service to advertise this TidalDrift instance and discover peers
-class TidalDriftPeerService: ObservableObject {
+class TidalDriftPeerService: NSObject, ObservableObject {
     static let shared = TidalDriftPeerService()
+    
+    private static let logger = Logger(subsystem: "com.tidaldrift", category: "PeerService")
+    
+    static func log(_ message: String) {
+        logger.info("\(message)")
+        print("🌊 TidalDrift PEER: \(message)")
+        
+        // Also write to a file for debugging
+        let logPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("tidaldrift-peer.log")
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let logLine = "[\(timestamp)] \(message)\n"
+        if let data = logLine.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logPath.path) {
+                if let handle = try? FileHandle(forWritingTo: logPath) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    handle.closeFile()
+                }
+            } else {
+                try? data.write(to: logPath)
+            }
+        }
+    }
     
     @Published var discoveredPeers: [String: PeerInfo] = [:] // keyed by hostname/IP
     @Published var isAdvertising = false
     
-    private var listener: NWListener?
-    private var browser: NWBrowser?
-    private let serviceType = "_tidaldrift._tcp"
-    private let port: UInt16 = 51235
+    // Use older NetService APIs which have better compatibility
+    private var netService: NetService?
+    private var netServiceBrowser: NetServiceBrowser?
+    private var discoveredServices: [NetService] = []
+    
+    private let serviceType = "_tidaldrift._tcp."
+    private let serviceDomain = "local."
+    private let port: Int32 = 51235
     
     private let localInfo: PeerInfo
     
@@ -31,11 +59,14 @@ class TidalDriftPeerService: ObservableObject {
         let fileSharingEnabled: Bool
     }
     
-    private init() {
+    private override init() {
         // Gather local system info
+        let hostname = Host.current().localizedName ?? "Unknown"
+        let ipAddress = NetworkUtils.getLocalIPAddress() ?? "Unknown"
+        
         localInfo = PeerInfo(
-            hostname: Host.current().localizedName ?? "Unknown",
-            ipAddress: NetworkUtils.getLocalIPAddress() ?? "Unknown",
+            hostname: hostname,
+            ipAddress: ipAddress,
             modelName: Self.getModelName(),
             modelIdentifier: Self.getModelIdentifier(),
             processorInfo: Self.getProcessorInfo(),
@@ -47,237 +78,193 @@ class TidalDriftPeerService: ObservableObject {
             screenSharingEnabled: true, // Will be updated when we check
             fileSharingEnabled: true    // Will be updated when we check
         )
+        
+        Self.log("Service initialized")
+        Self.log("Local hostname: \(hostname)")
+        Self.log("Local IP: \(ipAddress)")
+        Self.log("Model: \(localInfo.modelName)")
     }
     
-    // MARK: - Advertising
+    // MARK: - Advertising (using NetService for better compatibility)
     
     func startAdvertising() {
-        guard listener == nil else { return }
+        guard netService == nil else {
+            Self.log("Already advertising, skipping")
+            return
+        }
         
-        do {
-            let params = NWParameters.tcp
-            params.includePeerToPeer = true
+        Self.log("Starting advertising as '\(localInfo.hostname)' using NetService")
+        
+        // Create NetService for advertising - use port 0 for auto-assign
+        netService = NetService(
+            domain: "",  // Empty domain for local network
+            type: "_tidaldrift._tcp.",
+            name: localInfo.hostname,
+            port: 0  // Auto-assign port
+        )
+        
+        // Set TXT record with our info
+        let txtData = createTXTRecordData()
+        netService?.setTXTRecord(txtData)
+        
+        netService?.delegate = self
+        netService?.publish()  // Simple publish without options
+        
+        Self.log("NetService publish started")
+    }
+    
+    func stopAdvertising() {
+        netService?.stop()
+        netService = nil
+        DispatchQueue.main.async {
+            self.isAdvertising = false
+        }
+    }
+    
+    private func createTXTRecordData() -> Data {
+        let dict: [String: Data] = [
+            "model": localInfo.modelName.data(using: .utf8) ?? Data(),
+            "modelId": localInfo.modelIdentifier.data(using: .utf8) ?? Data(),
+            "cpu": localInfo.processorInfo.data(using: .utf8) ?? Data(),
+            "mem": "\(localInfo.memoryGB)".data(using: .utf8) ?? Data(),
+            "os": localInfo.macOSVersion.data(using: .utf8) ?? Data(),
+            "user": localInfo.userName.data(using: .utf8) ?? Data(),
+            "uptime": "\(localInfo.uptimeHours)".data(using: .utf8) ?? Data(),
+            "version": localInfo.tidalDriftVersion.data(using: .utf8) ?? Data(),
+            "screen": (localInfo.screenSharingEnabled ? "1" : "0").data(using: .utf8) ?? Data(),
+            "file": (localInfo.fileSharingEnabled ? "1" : "0").data(using: .utf8) ?? Data()
+        ]
+        return NetService.data(fromTXTRecord: dict)
+    }
+    
+    // MARK: - Discovery (using NetServiceBrowser for better compatibility)
+    
+    func startDiscovery() {
+        guard netServiceBrowser == nil else {
+            Self.log("Already browsing, skipping")
+            return
+        }
+        
+        Self.log("Starting discovery for _tidaldrift._tcp.")
+        
+        netServiceBrowser = NetServiceBrowser()
+        netServiceBrowser?.delegate = self
+        // Use empty domain for local network search
+        netServiceBrowser?.searchForServices(ofType: "_tidaldrift._tcp.", inDomain: "")
+        
+        Self.log("NetServiceBrowser search started")
+    }
+    
+    func stopDiscovery() {
+        netServiceBrowser?.stop()
+        netServiceBrowser = nil
+        discoveredServices.removeAll()
+    }
+    
+    func refreshDiscovery() {
+        Self.log("Refreshing discovery...")
+        stopDiscovery()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.startDiscovery()
+        }
+    }
+    
+    private func processDiscoveredService(_ service: NetService) {
+        let name = service.name
+        
+        // Skip ourselves
+        if name == localInfo.hostname {
+            Self.log("Skipping self: \(name)")
+            return
+        }
+        
+        Self.log("Processing discovered service: '\(name)'")
+        
+        // Get TXT record
+        if let txtData = service.txtRecordData() {
+            let txtDict = NetService.dictionary(fromTXTRecord: txtData)
+            let peer = parseTXTRecord(txtDict, name: name)
+            Self.log("Parsed TXT: model=\(peer.modelName), user=\(peer.userName)")
             
-            listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
-            
-            // Create TXT record with our info
-            let txtRecord = createTXTRecord()
-            listener?.service = NWListener.Service(
-                name: localInfo.hostname,
-                type: serviceType,
-                txtRecord: txtRecord
-            )
-            
-            listener?.stateUpdateHandler = { [weak self] state in
-                DispatchQueue.main.async {
-                    switch state {
-                    case .ready:
-                        self?.isAdvertising = true
-                        print("🌊 TidalDrift: Advertising on network")
-                    case .failed(let error):
-                        print("🌊 TidalDrift: Advertising failed - \(error)")
-                        self?.isAdvertising = false
-                    case .cancelled:
-                        self?.isAdvertising = false
-                    default:
+            // Get IP from resolved addresses
+            var ipAddress = ""
+            if let addresses = service.addresses {
+                for address in addresses {
+                    if let ip = extractIPAddress(from: address) {
+                        ipAddress = ip
                         break
                     }
                 }
             }
             
-            listener?.newConnectionHandler = { [weak self] connection in
-                self?.handleIncomingConnection(connection)
-            }
+            let updatedPeer = PeerInfo(
+                hostname: peer.hostname,
+                ipAddress: ipAddress,
+                modelName: peer.modelName,
+                modelIdentifier: peer.modelIdentifier,
+                processorInfo: peer.processorInfo,
+                memoryGB: peer.memoryGB,
+                macOSVersion: peer.macOSVersion,
+                userName: peer.userName,
+                uptimeHours: peer.uptimeHours,
+                tidalDriftVersion: peer.tidalDriftVersion,
+                screenSharingEnabled: peer.screenSharingEnabled,
+                fileSharingEnabled: peer.fileSharingEnabled
+            )
             
-            listener?.start(queue: .global(qos: .userInitiated))
-            
-        } catch {
-            print("🌊 TidalDrift: Failed to start advertising - \(error)")
+            DispatchQueue.main.async {
+                self.discoveredPeers[name] = updatedPeer
+                self.notifyNetworkDiscovery(peer: updatedPeer)
+                Self.log("✅ Added peer '\(name)' IP: \(ipAddress.isEmpty ? "resolving" : ipAddress)")
+            }
+        } else {
+            Self.log("No TXT record for '\(name)'")
         }
     }
     
-    func stopAdvertising() {
-        listener?.cancel()
-        listener = nil
-        isAdvertising = false
-    }
-    
-    private func createTXTRecord() -> NWTXTRecord {
-        var txtRecord = NWTXTRecord()
-        txtRecord["model"] = localInfo.modelName
-        txtRecord["modelId"] = localInfo.modelIdentifier
-        txtRecord["cpu"] = localInfo.processorInfo
-        txtRecord["mem"] = "\(localInfo.memoryGB)"
-        txtRecord["os"] = localInfo.macOSVersion
-        txtRecord["user"] = localInfo.userName
-        txtRecord["uptime"] = "\(localInfo.uptimeHours)"
-        txtRecord["version"] = localInfo.tidalDriftVersion
-        txtRecord["screen"] = localInfo.screenSharingEnabled ? "1" : "0"
-        txtRecord["file"] = localInfo.fileSharingEnabled ? "1" : "0"
-        return txtRecord
-    }
-    
-    private func handleIncomingConnection(_ connection: NWConnection) {
-        connection.stateUpdateHandler = { state in
-            switch state {
-            case .ready:
-                // Connection established - could exchange more data here
-                break
-            case .failed, .cancelled:
-                connection.cancel()
-            default:
-                break
+    private func extractIPAddress(from addressData: Data) -> String? {
+        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        
+        let result = addressData.withUnsafeBytes { (pointer: UnsafeRawBufferPointer) -> Int32 in
+            guard let sockaddr = pointer.baseAddress?.assumingMemoryBound(to: sockaddr.self) else {
+                return -1
+            }
+            return getnameinfo(sockaddr, socklen_t(addressData.count),
+                             &hostname, socklen_t(hostname.count),
+                             nil, 0, NI_NUMERICHOST)
+        }
+        
+        if result == 0 {
+            let ip = String(cString: hostname)
+            // Skip IPv6 link-local addresses
+            if !ip.hasPrefix("fe80:") {
+                return ip
             }
         }
-        connection.start(queue: .global(qos: .userInitiated))
+        return nil
     }
     
-    // MARK: - Discovery
-    
-    func startDiscovery() {
-        guard browser == nil else { return }
-        
-        let params = NWParameters()
-        params.includePeerToPeer = true
-        
-        browser = NWBrowser(for: .bonjour(type: serviceType, domain: "local."), using: params)
-        
-        browser?.stateUpdateHandler = { state in
-            switch state {
-            case .ready:
-                print("🌊 TidalDrift: Browsing for peers")
-            case .failed(let error):
-                print("🌊 TidalDrift: Browse failed - \(error)")
-            default:
-                break
+    private func parseTXTRecord(_ record: [String: Data], name: String) -> PeerInfo {
+        func getString(_ key: String) -> String {
+            if let data = record[key], let str = String(data: data, encoding: .utf8) {
+                return str
             }
+            return ""
         }
         
-        browser?.browseResultsChangedHandler = { [weak self] results, changes in
-            self?.handleBrowseResults(results)
-        }
-        
-        browser?.start(queue: .global(qos: .userInitiated))
-    }
-    
-    func stopDiscovery() {
-        browser?.cancel()
-        browser = nil
-    }
-    
-    private func handleBrowseResults(_ results: Set<NWBrowser.Result>) {
-        print("🌊 TidalDrift: Found \(results.count) peer results")
-        
-        for result in results {
-            switch result.endpoint {
-            case .service(let name, let type, let domain, let interface):
-                print("🌊 TidalDrift: Found service: \(name) type=\(type) domain=\(domain)")
-                
-                // Skip ourselves
-                if name == localInfo.hostname {
-                    print("🌊 TidalDrift: Skipping self: \(name)")
-                    continue
-                }
-                
-                // Extract TXT record data
-                if case .bonjour(let txtRecord) = result.metadata {
-                    var peer = parseTXTRecord(txtRecord, name: name)
-                    
-                    // Resolve the IP address
-                    resolveEndpoint(result.endpoint) { [weak self] ipAddress in
-                        if let ip = ipAddress {
-                            // Create updated peer with IP
-                            let updatedPeer = PeerInfo(
-                                hostname: peer.hostname,
-                                ipAddress: ip,
-                                modelName: peer.modelName,
-                                modelIdentifier: peer.modelIdentifier,
-                                processorInfo: peer.processorInfo,
-                                memoryGB: peer.memoryGB,
-                                macOSVersion: peer.macOSVersion,
-                                userName: peer.userName,
-                                uptimeHours: peer.uptimeHours,
-                                tidalDriftVersion: peer.tidalDriftVersion,
-                                screenSharingEnabled: peer.screenSharingEnabled,
-                                fileSharingEnabled: peer.fileSharingEnabled
-                            )
-                            
-                            DispatchQueue.main.async {
-                                self?.discoveredPeers[name] = updatedPeer
-                                self?.notifyNetworkDiscovery(peer: updatedPeer)
-                                print("🌊 TidalDrift: Added peer \(name) at IP \(ip)")
-                            }
-                        } else {
-                            DispatchQueue.main.async {
-                                self?.discoveredPeers[name] = peer
-                                self?.notifyNetworkDiscovery(peer: peer)
-                                print("🌊 TidalDrift: Added peer \(name) (no IP resolved)")
-                            }
-                        }
-                    }
-                } else {
-                    print("🌊 TidalDrift: No TXT record for \(name)")
-                }
-                
-            default:
-                break
-            }
-        }
-    }
-    
-    private func resolveEndpoint(_ endpoint: NWEndpoint, completion: @escaping (String?) -> Void) {
-        let connection = NWConnection(to: endpoint, using: .tcp)
-        
-        connection.stateUpdateHandler = { state in
-            switch state {
-            case .ready:
-                if case .hostPort(let host, _) = connection.currentPath?.remoteEndpoint {
-                    if case .ipv4(let ipv4) = host {
-                        let ip = ipv4.debugDescription
-                        connection.cancel()
-                        completion(ip)
-                        return
-                    } else if case .ipv6(let ipv6) = host {
-                        let ip = ipv6.debugDescription
-                        connection.cancel()
-                        completion(ip)
-                        return
-                    }
-                }
-                connection.cancel()
-                completion(nil)
-            case .failed, .cancelled:
-                completion(nil)
-            default:
-                break
-            }
-        }
-        
-        connection.start(queue: .global(qos: .userInitiated))
-        
-        // Timeout after 2 seconds
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-            if connection.state != .ready && connection.state != .cancelled {
-                connection.cancel()
-                completion(nil)
-            }
-        }
-    }
-    
-    private func parseTXTRecord(_ record: NWTXTRecord, name: String) -> PeerInfo {
         return PeerInfo(
             hostname: name,
-            ipAddress: "", // Will be resolved separately
-            modelName: record["model"] ?? "Unknown",
-            modelIdentifier: record["modelId"] ?? "",
-            processorInfo: record["cpu"] ?? "",
-            memoryGB: Int(record["mem"] ?? "0") ?? 0,
-            macOSVersion: record["os"] ?? "",
-            userName: record["user"] ?? "",
-            uptimeHours: Int(record["uptime"] ?? "0") ?? 0,
-            tidalDriftVersion: record["version"] ?? "",
-            screenSharingEnabled: record["screen"] == "1",
-            fileSharingEnabled: record["file"] == "1"
+            ipAddress: "",
+            modelName: getString("model").isEmpty ? "Unknown" : getString("model"),
+            modelIdentifier: getString("modelId"),
+            processorInfo: getString("cpu"),
+            memoryGB: Int(getString("mem")) ?? 0,
+            macOSVersion: getString("os"),
+            userName: getString("user"),
+            uptimeHours: Int(getString("uptime")) ?? 0,
+            tidalDriftVersion: getString("version"),
+            screenSharingEnabled: getString("screen") == "1",
+            fileSharingEnabled: getString("file") == "1"
         )
     }
     
@@ -369,24 +356,99 @@ class TidalDriftPeerService: ObservableObject {
     }
 }
 
+// MARK: - NetServiceDelegate
+
+extension TidalDriftPeerService: NetServiceDelegate {
+    func netServiceDidPublish(_ sender: NetService) {
+        Self.log("✅ NetService published: \(sender.name)")
+        DispatchQueue.main.async {
+            self.isAdvertising = true
+        }
+    }
+    
+    func netService(_ sender: NetService, didNotPublish errorDict: [String : NSNumber]) {
+        Self.log("❌ NetService failed to publish: \(errorDict)")
+    }
+    
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        Self.log("NetService resolved: \(sender.name)")
+        processDiscoveredService(sender)
+    }
+    
+    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
+        Self.log("NetService failed to resolve: \(sender.name) - \(errorDict)")
+    }
+}
+
+// MARK: - NetServiceBrowserDelegate
+
+extension TidalDriftPeerService: NetServiceBrowserDelegate {
+    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
+        Self.log("Browser will search")
+    }
+    
+    func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
+        Self.log("Browser stopped search")
+    }
+    
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
+        Self.log("❌ Browser failed to search: \(errorDict)")
+    }
+    
+    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        Self.log("Found service: '\(service.name)' (more coming: \(moreComing))")
+        
+        // Skip ourselves
+        if service.name == localInfo.hostname {
+            Self.log("Skipping self")
+            return
+        }
+        
+        // Keep track of discovered services and resolve them
+        discoveredServices.append(service)
+        service.delegate = self
+        service.resolve(withTimeout: 5.0)
+    }
+    
+    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        Self.log("Service removed: '\(service.name)'")
+        discoveredServices.removeAll { $0.name == service.name }
+        
+        // Remove from discovered peers
+        DispatchQueue.main.async {
+            self.discoveredPeers.removeValue(forKey: service.name)
+        }
+    }
+}
+
 // MARK: - NetworkDiscoveryService Extension
 
 extension NetworkDiscoveryService {
+    private static let peerLogger = Logger(subsystem: "com.tidaldrift", category: "PeerMatching")
+    
     func markAsTidalDriftPeer(hostname: String, peerInfo: TidalDriftPeerService.PeerInfo) {
         DispatchQueue.main.async {
             // Try to find matching device by hostname, name, or IP address
             let normalizedHostname = hostname.lowercased().replacingOccurrences(of: ".local", with: "")
+            
+            Self.peerLogger.info("Looking for device matching '\(hostname)' (normalized: '\(normalizedHostname)')")
+            Self.peerLogger.info("Current devices: \(self.discoveredDevices.map { $0.name }.joined(separator: ", "))")
             
             if let index = self.discoveredDevices.firstIndex(where: { device in
                 let deviceName = device.name.lowercased()
                 let deviceHostname = device.hostname.lowercased().replacingOccurrences(of: ".local", with: "")
                 let deviceIP = device.ipAddress
                 
-                return deviceName == normalizedHostname ||
+                let matches = deviceName == normalizedHostname ||
                        deviceHostname == normalizedHostname ||
                        deviceName.contains(normalizedHostname) ||
                        normalizedHostname.contains(deviceName) ||
                        (!peerInfo.ipAddress.isEmpty && deviceIP == peerInfo.ipAddress)
+                
+                if matches {
+                    Self.peerLogger.info("Match found: \(device.name)")
+                }
+                return matches
             }) {
                 var device = self.discoveredDevices[index]
                 device.isTidalDriftPeer = true
@@ -404,7 +466,8 @@ extension NetworkDiscoveryService {
                 }
                 
                 self.discoveredDevices[index] = device
-                print("🌊 Marked \(device.name) as TidalDrift peer (matched from \(hostname))")
+                Self.peerLogger.info("✅ Marked '\(device.name)' as TidalDrift peer")
+                print("🌊 TidalDrift PEER: Marked \(device.name) as TidalDrift peer (matched from \(hostname))")
             } else {
                 // Create a new device entry for this TidalDrift peer
                 let displayName = hostname.replacingOccurrences(of: ".local", with: "")
@@ -425,7 +488,8 @@ extension NetworkDiscoveryService {
                     peerUptimeHours: peerInfo.uptimeHours
                 )
                 self.discoveredDevices.append(newDevice)
-                print("🌊 Added new TidalDrift peer: \(displayName)")
+                Self.peerLogger.info("✅ Added new TidalDrift peer: '\(displayName)'")
+                print("🌊 TidalDrift PEER: Added new TidalDrift peer: \(displayName)")
             }
         }
     }
