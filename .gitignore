@@ -95,8 +95,6 @@ iOSInjectionProject/
 ._*
 
 # Build output
-*.app/
-TidalDrift.app/
 
 # IDE
 .idea/
