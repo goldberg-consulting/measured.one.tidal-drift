@@ -248,6 +248,11 @@ class SharingConfigurationService: ObservableObject {
         }
     }
     
+    /// Public method to execute arbitrary AppleScript (for user creation, etc.)
+    func executeAppleScript(_ source: String) async -> Bool {
+        return await runAppleScript(source)
+    }
+    
     // MARK: - Open Settings
     
     func openScreenSharingSettings() {

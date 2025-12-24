@@ -59,6 +59,8 @@ struct OnboardingContainerView: View {
             WelcomeStepView()
         case .screenSharing:
             ScreenSharingSetupView(viewModel: viewModel)
+        case .sharingUser:
+            SharingUserSetupView(viewModel: viewModel)
         case .fileSharing:
             FileSharingSetupView(viewModel: viewModel)
         case .firewall:
@@ -115,6 +117,7 @@ struct OnboardingContainerView: View {
 enum OnboardingStep: Int, CaseIterable {
     case welcome
     case screenSharing
+    case sharingUser  // New: Create dedicated sharing account
     case fileSharing
     case firewall
     case completion

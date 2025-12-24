@@ -411,7 +411,7 @@ class NetworkDiscoveryService: ObservableObject {
     func scanSubnet(baseIP: String, startHost: Int = 1, endHost: Int = 254) async {
         await MainActor.run {
             isScanningSubnet = true
-            scanProgress = 0
+            scanProgress = 0.01 // Show immediate progress
         }
         
         // Parse base IP (e.g., "192.168.1" from "192.168.1.100")
@@ -422,24 +422,32 @@ class NetworkDiscoveryService: ObservableObject {
         }
         let subnet = components.prefix(3).joined(separator: ".")
         
-        let totalIPs = endHost - startHost + 1
+        // Get the current host number to prioritize nearby IPs
+        let currentHost = Int(components.last ?? "1") ?? 1
+        
+        // Reorder to scan nearby IPs first (more likely to find devices quickly)
+        var hostsToScan = Array(startHost...endHost)
+        hostsToScan.sort { abs($0 - currentHost) < abs($1 - currentHost) }
+        
+        let totalIPs = hostsToScan.count
         var scanned = 0
         
-        // Scan in batches to avoid overwhelming the network
-        let batchSize = 15
-        for batchStart in stride(from: startHost, through: endHost, by: batchSize) {
-            let batchEnd = min(batchStart + batchSize - 1, endHost)
-            
-            // Structure to hold scan results for an IP
-            struct ScanResult {
-                let ip: String
-                let hasScreenSharing: Bool
-                let hasFileSharing: Bool
-                let hasAFP: Bool
-            }
+        // Structure to hold scan results for an IP
+        struct ScanResult: Sendable {
+            let ip: String
+            let hasScreenSharing: Bool
+            let hasFileSharing: Bool
+            let hasAFP: Bool
+        }
+        
+        // Scan in batches, processing nearby IPs first for faster initial results
+        let batchSize = 25 // Larger batches for faster scanning
+        for batchStart in stride(from: 0, to: hostsToScan.count, by: batchSize) {
+            let batchEnd = min(batchStart + batchSize, hostsToScan.count)
+            let batch = Array(hostsToScan[batchStart..<batchEnd])
             
             await withTaskGroup(of: ScanResult.self) { group in
-                for hostNum in batchStart...batchEnd {
+                for hostNum in batch {
                     let ip = "\(subnet).\(hostNum)"
                     group.addTask {
                         // Check all three services in parallel for each IP

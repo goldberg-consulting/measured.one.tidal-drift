@@ -27,6 +27,8 @@ class OnboardingViewModel: ObservableObject {
             canProceed = true
         case .screenSharing:
             canProceed = screenSharingEnabled
+        case .sharingUser:
+            canProceed = true // User can skip or create account
         case .fileSharing:
             canProceed = fileSharingEnabled
         case .firewall:
