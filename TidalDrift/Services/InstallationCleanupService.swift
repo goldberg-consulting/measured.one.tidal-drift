@@ -173,3 +173,4 @@ extension Notification.Name {
     static let duplicateInstallationsFound = Notification.Name("duplicateInstallationsFound")
 }
 
+

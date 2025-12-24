@@ -66,13 +66,6 @@ struct DeviceListRowView: View {
                 }
             }
             
-            // Last seen indicator
-            if !device.isOnline {
-                Text(device.lastSeenText)
-                    .font(.caption2)
-                    .foregroundColor(device.isStale ? .orange : .secondary)
-            }
-            
             StatusIndicator(isOnline: device.isOnline)
             
             Button("Connect") {
