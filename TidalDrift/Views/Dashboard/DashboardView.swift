@@ -172,33 +172,18 @@ struct DashboardView: View {
                 .frame(width: 80)
                 .labelsHidden()
                 
-                Menu {
-                    Button {
-                        discoveryService.refreshScan()
-                    } label: {
-                        Label("Refresh Scan", systemImage: "arrow.clockwise")
-                    }
-                    
-                    Divider()
-                    
-                    let staleCount = appState.discoveredDevices.filter { $0.isStale }.count
+                // Clear stale devices button (only show if there are stale devices)
+                let staleCount = appState.discoveredDevices.filter { $0.isStale }.count
+                if staleCount > 0 {
                     Button {
                         discoveryService.removeStaleDevices()
                     } label: {
-                        Label("Remove Old Devices (\(staleCount))", systemImage: "clock.badge.xmark")
+                        Label("Clear \(staleCount) Old", systemImage: "clock.badge.xmark")
                     }
-                    .disabled(staleCount == 0)
-                    
-                    Button(role: .destructive) {
-                        discoveryService.clearSavedDevices()
-                    } label: {
-                        Label("Clear All Saved Devices", systemImage: "trash")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.title3)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Remove devices not seen in 24+ hours")
                 }
-                .menuStyle(.borderlessButton)
             }
             .padding()
             
