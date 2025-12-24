@@ -15,6 +15,13 @@ class PermissionDiagnosticService: ObservableObject {
     @Published var lastDiagnostic: DiagnosticResult?
     @Published var isRunningDiagnostic: Bool = false
     
+    // Hostname configuration
+    @Published var computerName: String = ""
+    @Published var localHostname: String = ""
+    @Published var bonjourDomain: String = "local"
+    @Published var wideAreaBonjourEnabled: Bool = false
+    @Published var dynamicGlobalHostname: String?
+    
     private init() {}
     
     // MARK: - Diagnostic Result
@@ -271,6 +278,84 @@ class PermissionDiagnosticService: ObservableObject {
         }
         
         return installations
+    }
+    
+    // MARK: - Hostname & Bonjour Configuration
+    
+    struct HostnameConfig {
+        var computerName: String
+        var localHostname: String
+        var hostname: String? // Dynamic global hostname
+        var bonjourDomains: [String]
+        var wideAreaEnabled: Bool
+    }
+    
+    /// Check current hostname and Bonjour configuration
+    func checkHostnameConfiguration() -> HostnameConfig {
+        // Get Computer Name
+        let computerNameResult = ShellExecutor.execute("scutil --get ComputerName 2>/dev/null")
+        let computerName = computerNameResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Get Local Hostname (.local domain)
+        let localHostnameResult = ShellExecutor.execute("scutil --get LocalHostName 2>/dev/null")
+        let localHostname = localHostnameResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Get HostName (dynamic global hostname)
+        let hostnameResult = ShellExecutor.execute("scutil --get HostName 2>/dev/null")
+        let hostname = hostnameResult.exitCode == 0 ? hostnameResult.output.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        
+        // Check for Wide-Area Bonjour configuration
+        let wideAreaResult = ShellExecutor.execute("defaults read /Library/Preferences/com.apple.mDNSResponder 2>/dev/null")
+        let wideAreaEnabled = !wideAreaResult.output.isEmpty && wideAreaResult.exitCode == 0
+        
+        // Get Bonjour registration domains
+        var bonjourDomains = ["local"]
+        // Check for additional domains from mDNS config
+        if wideAreaEnabled {
+            // Parse mDNSResponder config for additional domains
+            let lines = wideAreaResult.output.split(separator: "\n")
+            for line in lines {
+                if line.contains("RegistrationDomains") || line.contains("BrowseDomains") {
+                    // Extract domain names
+                    if let range = line.range(of: "\"(.+?)\"", options: .regularExpression) {
+                        let domain = String(line[range]).replacingOccurrences(of: "\"", with: "")
+                        if !domain.isEmpty && !bonjourDomains.contains(domain) {
+                            bonjourDomains.append(domain)
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Update published properties
+        DispatchQueue.main.async {
+            self.computerName = computerName
+            self.localHostname = localHostname
+            self.dynamicGlobalHostname = hostname
+            self.wideAreaBonjourEnabled = wideAreaEnabled
+            self.bonjourDomain = bonjourDomains.first ?? "local"
+        }
+        
+        return HostnameConfig(
+            computerName: computerName,
+            localHostname: localHostname,
+            hostname: hostname,
+            bonjourDomains: bonjourDomains,
+            wideAreaEnabled: wideAreaEnabled
+        )
+    }
+    
+    /// Open Sharing settings to edit hostname
+    func openHostnameSettings() {
+        if #available(macOS 13.0, *) {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.Sharing-Settings.extension") {
+                NSWorkspace.shared.open(url)
+            }
+        } else {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.sharing") {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
     
     // MARK: - Fix Actions

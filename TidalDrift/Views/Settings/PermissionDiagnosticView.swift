@@ -4,6 +4,7 @@ struct PermissionDiagnosticView: View {
     @ObservedObject var diagnosticService = PermissionDiagnosticService.shared
     @State private var showResetConfirmation = false
     @State private var resetMessage: String?
+    @State private var hostnameConfig: PermissionDiagnosticService.HostnameConfig?
     
     var body: some View {
         ScrollView {
@@ -11,6 +12,8 @@ struct PermissionDiagnosticView: View {
                 headerSection
                 
                 statusCards
+                
+                hostnameSection
                 
                 if let result = diagnosticService.lastDiagnostic {
                     issuesSection(result)
@@ -23,10 +26,11 @@ struct PermissionDiagnosticView: View {
             }
             .padding()
         }
-        .frame(minWidth: 500, minHeight: 500)
+        .frame(minWidth: 500, minHeight: 550)
         .onAppear {
             Task {
                 await diagnosticService.runFullDiagnostic()
+                hostnameConfig = diagnosticService.checkHostnameConfiguration()
             }
         }
         .alert("Reset Complete", isPresented: .constant(resetMessage != nil)) {
@@ -102,6 +106,84 @@ struct PermissionDiagnosticView: View {
                 }
             )
         }
+    }
+    
+    private var hostnameSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Hostname & Bonjour")
+                    .font(.headline)
+                
+                Spacer()
+                
+                Button {
+                    diagnosticService.openHostnameSettings()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            
+            if let config = hostnameConfig {
+                VStack(alignment: .leading, spacing: 8) {
+                    HostnameRow(
+                        label: "Computer Name",
+                        value: config.computerName,
+                        help: "Friendly name shown in Finder"
+                    )
+                    
+                    HostnameRow(
+                        label: "Local Hostname",
+                        value: "\(config.localHostname).local",
+                        help: "Used for Bonjour on local network"
+                    )
+                    
+                    if let globalHostname = config.hostname, !globalHostname.isEmpty {
+                        HostnameRow(
+                            label: "Dynamic Global Hostname",
+                            value: globalHostname,
+                            help: "For remote access via internet"
+                        )
+                    }
+                    
+                    HStack {
+                        Text("Bonjour Domains")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        Spacer()
+                        
+                        ForEach(config.bonjourDomains, id: \.self) { domain in
+                            Text(domain)
+                                .font(.caption)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                        }
+                    }
+                    
+                    if !config.wideAreaEnabled {
+                        HStack {
+                            Image(systemName: "info.circle")
+                                .foregroundColor(.blue)
+                            Text("Wide-Area Bonjour is not configured. This is only needed for access outside your local network.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            } else {
+                Text("Loading hostname configuration...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
     }
     
     @ViewBuilder
@@ -322,6 +404,34 @@ struct ExplanationRow: View {
                     .foregroundColor(.secondary)
             }
         }
+    }
+}
+
+struct HostnameRow: View {
+    let label: String
+    let value: String
+    let help: String
+    
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Text(value)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+            }
+            
+            Spacer()
+            
+            Text(help)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.vertical, 4)
     }
 }
 
