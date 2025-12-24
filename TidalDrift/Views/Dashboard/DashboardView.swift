@@ -184,18 +184,25 @@ struct DashboardView: View {
             }
             .padding()
             
-            // Subnet scan progress bar
-            if discoveryService.isScanningSubnet {
-                VStack(spacing: 4) {
+            // Fixed height progress area - always reserves space
+            HStack(spacing: 8) {
+                if discoveryService.isScanningSubnet {
                     ProgressView(value: discoveryService.scanProgress)
                         .progressViewStyle(.linear)
-                    Text("Scanning network for devices... \(Int(discoveryService.scanProgress * 100))%")
+                        .frame(maxWidth: 200)
+                    
+                    Text("\(Int(discoveryService.scanProgress * 100))%")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .monospacedDigit()
+                        .frame(width: 35, alignment: .trailing)
                 }
-                .padding(.horizontal)
-                .padding(.bottom, 8)
+                
+                Spacer()
             }
+            .frame(height: 20)
+            .padding(.horizontal)
+            .opacity(discoveryService.isScanningSubnet ? 1 : 0)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
