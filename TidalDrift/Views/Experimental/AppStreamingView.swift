@@ -242,16 +242,36 @@ struct AppStreamingView: View {
             } else if service.availableApps.isEmpty {
                 Spacer()
                 VStack(spacing: 12) {
-                    Image(systemName: "app.dashed")
+                    Image(systemName: service.errorMessage != nil ? "exclamationmark.triangle" : "app.dashed")
                         .font(.system(size: 30))
-                        .foregroundColor(.secondary)
-                    Text("No apps found")
-                        .foregroundColor(.secondary)
-                    Button("Grant Permission") {
-                        showingPermissionAlert = true
+                        .foregroundColor(service.errorMessage != nil ? .orange : .secondary)
+                    
+                    if let error = service.errorMessage {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                    } else {
+                        Text("No apps found")
+                            .foregroundColor(.secondary)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    
+                    HStack(spacing: 12) {
+                        Button("Refresh") {
+                            Task {
+                                await service.refreshAvailableApps()
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        
+                        Button("Open Settings") {
+                            openScreenRecordingSettings()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
                 }
                 Spacer()
             } else {

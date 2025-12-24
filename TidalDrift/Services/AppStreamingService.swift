@@ -65,24 +65,36 @@ class AppStreamingService: ObservableObject {
         
         do {
             // Get shareable content using ScreenCaptureKit
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            // Include off-screen windows too so minimized apps show up
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             
             // Group windows by application
             var appDict: [pid_t: (app: SCRunningApplication, windows: [SCWindow])] = [:]
             
+            // System UI elements to skip (not useful for streaming)
+            let systemUIBundleIds = [
+                "com.apple.dock",
+                "com.apple.WindowManager", 
+                "com.apple.controlcenter",
+                "com.apple.notificationcenterui",
+                "com.apple.Spotlight",
+                "com.apple.SystemUIServer"
+            ]
+            
             for window in content.windows {
                 guard let app = window.owningApplication else { continue }
                 
-                // Skip system windows and TidalDrift itself
                 let bundleId = app.bundleIdentifier
+                
+                // Skip TidalDrift itself
                 if bundleId == Bundle.main.bundleIdentifier { continue }
-                if bundleId.hasPrefix("com.apple.") {
-                    // Allow some Apple apps like Safari, but skip system UI
-                    let allowedAppleApps = ["com.apple.Safari", "com.apple.finder", "com.apple.Preview", 
-                                           "com.apple.Notes", "com.apple.mail", "com.apple.TextEdit"]
-                    if !allowedAppleApps.contains(bundleId) {
-                        continue
-                    }
+                
+                // Skip system UI elements (not useful apps)
+                if systemUIBundleIds.contains(bundleId) { continue }
+                
+                // Skip windows with no title and tiny size (likely system decorations)
+                if window.title == nil && window.frame.width < 50 && window.frame.height < 50 {
+                    continue
                 }
                 
                 if appDict[app.processID] == nil {
@@ -116,8 +128,19 @@ class AppStreamingService: ObservableObject {
             // Sort by name
             availableApps = apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             
-        } catch {
-            errorMessage = "Failed to get available apps: \(error.localizedDescription)"
+            // If empty, provide helpful message
+            if availableApps.isEmpty {
+                errorMessage = "No apps with windows found. Try opening some applications."
+            }
+            
+        } catch let error as NSError {
+            // Check for specific permission error
+            if error.domain == "com.apple.ScreenCaptureKit.SCStreamError" || 
+               error.localizedDescription.contains("permission") {
+                errorMessage = "Screen Recording permission required. Check System Settings → Privacy & Security → Screen Recording"
+            } else {
+                errorMessage = "Failed to get available apps: \(error.localizedDescription)"
+            }
             #if DEBUG
             print("AppStreamingService error: \(error)")
             #endif
