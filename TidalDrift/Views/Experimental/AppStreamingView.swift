@@ -6,6 +6,8 @@ struct AppStreamingView: View {
     @StateObject private var networkService = StreamingNetworkService.shared
     @State private var showingInfo = false
     @State private var showingPermissionAlert = false
+    @State private var showingResetAlert = false
+    @State private var resetMessage: String?
     @State private var selectedTab = 0  // 0 = Local, 1 = Remote
     
     var body: some View {
@@ -28,6 +30,25 @@ struct AppStreamingView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("TidalDrift needs screen recording permission to list available apps for streaming.")
+        }
+        .alert("Reset Screen Recording Permission?", isPresented: $showingResetAlert) {
+            Button("Reset & Open Settings") {
+                resetScreenRecordingPermission()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will reset TidalDrift's screen recording permission. After resetting, you'll need to re-add TidalDrift in System Settings.\n\nThis fixes issues where the wrong app version has permission.")
+        }
+        .alert("Permission Reset", isPresented: .constant(resetMessage != nil)) {
+            Button("Open Settings") {
+                openScreenRecordingSettings()
+                resetMessage = nil
+            }
+            Button("OK") {
+                resetMessage = nil
+            }
+        } message: {
+            Text(resetMessage ?? "")
         }
     }
     
@@ -257,20 +278,33 @@ struct AppStreamingView: View {
                             .foregroundColor(.secondary)
                     }
                     
-                    HStack(spacing: 12) {
-                        Button("Refresh") {
-                            Task {
-                                await service.refreshAvailableApps()
+                    VStack(spacing: 10) {
+                        HStack(spacing: 12) {
+                            Button("Refresh") {
+                                Task {
+                                    await service.refreshAvailableApps()
+                                }
                             }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            
+                            Button("Open Settings") {
+                                openScreenRecordingSettings()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
                         
-                        Button("Open Settings") {
-                            openScreenRecordingSettings()
+                        // Show reset option if there's a TCC error
+                        if service.errorMessage?.contains("TCC") == true || 
+                           service.errorMessage?.contains("declined") == true {
+                            Button("Reset TidalDrift Permission") {
+                                showingResetAlert = true
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .foregroundColor(.orange)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
                     }
                 }
                 Spacer()
@@ -567,6 +601,33 @@ struct AppStreamingView: View {
     private func openScreenRecordingSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
+        }
+    }
+    
+    private func resetScreenRecordingPermission() {
+        // Reset screen recording permission for just TidalDrift
+        let bundleId = Bundle.main.bundleIdentifier ?? "com.goldbergconsulting.tidaldrift"
+        
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        task.arguments = ["reset", "ScreenCapture", bundleId]
+        
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe
+        
+        do {
+            try task.run()
+            task.waitUntilExit()
+            
+            if task.terminationStatus == 0 {
+                resetMessage = "Permission reset successfully!\n\nPlease quit TidalDrift, then:\n1. Reopen TidalDrift\n2. Click 'Open Settings'\n3. Add TidalDrift to the list"
+            } else {
+                // Try without bundle ID (resets all - may need admin)
+                resetMessage = "Couldn't reset just TidalDrift. You may need to manually remove and re-add TidalDrift in System Settings → Screen Recording."
+            }
+        } catch {
+            resetMessage = "Reset failed: \(error.localizedDescription)\n\nTry running in Terminal:\ntccutil reset ScreenCapture \(bundleId)"
         }
     }
 }
