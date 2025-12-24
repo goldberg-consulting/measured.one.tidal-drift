@@ -3,8 +3,10 @@ import SwiftUI
 /// Experimental view for app-specific streaming
 struct AppStreamingView: View {
     @StateObject private var service = AppStreamingService.shared
+    @StateObject private var networkService = StreamingNetworkService.shared
     @State private var showingInfo = false
     @State private var showingPermissionAlert = false
+    @State private var selectedTab = 0  // 0 = Local, 1 = Remote
     
     var body: some View {
         VStack(spacing: 0) {
@@ -15,10 +17,10 @@ struct AppStreamingView: View {
             if !service.isExperimentalEnabled {
                 experimentalDisabledView
             } else {
-                content
+                enabledContent
             }
         }
-        .frame(minWidth: 400, minHeight: 500)
+        .frame(minWidth: 500, minHeight: 550)
         .alert("Screen Recording Permission Required", isPresented: $showingPermissionAlert) {
             Button("Open System Settings") {
                 openScreenRecordingSettings()
@@ -48,7 +50,7 @@ struct AppStreamingView: View {
                         .cornerRadius(4)
                 }
                 
-                Text("Stream a single app instead of your entire desktop")
+                Text("Stream individual apps across your network")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -80,7 +82,7 @@ struct AppStreamingView: View {
                 .font(.title2)
                 .fontWeight(.semibold)
             
-            Text("App-specific streaming allows you to share just one application window instead of your entire desktop.")
+            Text("App-specific streaming allows you to share just one application window instead of your entire desktop, and discover apps shared by other machines on your network.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 40)
@@ -106,87 +108,106 @@ struct AppStreamingView: View {
         .padding()
     }
     
-    private var content: some View {
+    private var enabledContent: some View {
         VStack(spacing: 0) {
-            // Quick summary bar
-            if !service.availableApps.isEmpty {
-                quickSummaryBar
-                Divider()
+            // Tab picker
+            Picker("", selection: $selectedTab) {
+                HStack(spacing: 4) {
+                    Image(systemName: "desktopcomputer")
+                    Text("My Apps")
+                }
+                .tag(0)
+                
+                HStack(spacing: 4) {
+                    Image(systemName: "network")
+                    Text("Remote Apps")
+                    if !networkService.allRemoteApps.isEmpty {
+                        Text("(\(networkService.allRemoteApps.count))")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .tag(1)
             }
+            .pickerStyle(.segmented)
+            .padding()
+            
+            Divider()
+            
+            if selectedTab == 0 {
+                localAppsContent
+            } else {
+                remoteAppsContent
+            }
+        }
+    }
+    
+    // MARK: - Local Apps Tab
+    
+    private var localAppsContent: some View {
+        VStack(spacing: 0) {
+            // Hosting status bar
+            hostingStatusBar
+            
+            Divider()
             
             HSplitView {
-                appList
+                localAppList
                     .frame(minWidth: 200)
                 
-                detailView
+                localDetailView
                     .frame(minWidth: 250)
             }
         }
     }
     
-    private var quickSummaryBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                // Apps count badge
-                HStack(spacing: 6) {
-                    Image(systemName: "app.badge.fill")
-                        .foregroundColor(.blue)
-                    Text("\(service.availableApps.count) Apps Available")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(8)
+    private var hostingStatusBar: some View {
+        HStack(spacing: 12) {
+            // Hosting toggle
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(networkService.isHosting ? Color.green : Color.secondary.opacity(0.3))
+                    .frame(width: 8, height: 8)
                 
-                Divider()
-                    .frame(height: 20)
-                
-                // Quick app icons
-                ForEach(service.availableApps.prefix(8)) { app in
-                    Button {
-                        service.selectApp(app)
-                    } label: {
-                        HStack(spacing: 6) {
-                            if let icon = app.icon {
-                                Image(nsImage: icon)
-                                    .resizable()
-                                    .frame(width: 20, height: 20)
-                            } else {
-                                Image(systemName: "app.dashed")
-                                    .frame(width: 20, height: 20)
-                                    .foregroundColor(.secondary)
-                            }
-                            Text(app.name)
-                                .font(.caption)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            service.selectedApp?.id == app.id 
-                                ? Color.accentColor.opacity(0.2) 
-                                : Color.secondary.opacity(0.1)
-                        )
-                        .cornerRadius(6)
-                    }
-                    .buttonStyle(.plain)
-                }
-                
-                if service.availableApps.count > 8 {
-                    Text("+\(service.availableApps.count - 8) more")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+                Text(networkService.isHosting ? "Sharing \(networkService.hostedApps.count) apps" : "Not sharing")
+                    .font(.caption)
+                    .foregroundColor(networkService.isHosting ? .primary : .secondary)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+            
+            Toggle("Share My Apps", isOn: Binding(
+                get: { networkService.isHosting },
+                set: { enabled in
+                    if enabled {
+                        networkService.startHosting(apps: service.availableApps)
+                    } else {
+                        networkService.stopHosting()
+                    }
+                }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            
+            Spacer()
+            
+            Button {
+                Task {
+                    await service.refreshAvailableApps()
+                    if networkService.isHosting {
+                        networkService.updateHostedApps(service.availableApps)
+                    }
+                }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .disabled(service.isLoading)
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(networkService.isHosting ? Color.green.opacity(0.1) : Color.clear)
     }
     
-    private var appList: some View {
+    private var localAppList: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Running Apps")
@@ -195,16 +216,13 @@ struct AppStreamingView: View {
                 
                 Spacer()
                 
-                Button {
-                    Task {
-                        await service.refreshAvailableApps()
-                    }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .disabled(service.isLoading)
+                Text("\(service.availableApps.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.2))
+                    .cornerRadius(4)
             }
             .padding(.horizontal)
             .padding(.vertical, 10)
@@ -258,7 +276,7 @@ struct AppStreamingView: View {
         }
     }
     
-    private var detailView: some View {
+    private var localDetailView: some View {
         VStack {
             if let app = service.selectedApp {
                 selectedAppDetail(app)
@@ -277,7 +295,7 @@ struct AppStreamingView: View {
             Text("Select an App")
                 .font(.headline)
                 .foregroundColor(.secondary)
-            Text("Choose an app from the list to stream")
+            Text("Choose an app to share with others")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -306,6 +324,17 @@ struct AppStreamingView: View {
                     Text(bundleId)
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+                
+                // Sharing status
+                if networkService.isHosting && networkService.hostedApps.contains(app.bundleIdentifier ?? "") {
+                    HStack(spacing: 4) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .foregroundColor(.green)
+                        Text("Being shared")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
                 }
             }
             .padding(.top, 20)
@@ -343,23 +372,140 @@ struct AppStreamingView: View {
                 }
                 .buttonStyle(.bordered)
                 
-                if let info = service.getStreamingInfo() {
-                    Text(info.note)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    
-                    Button {
-                        // Open standard screen sharing for now
-                        if let url = URL(string: info.url) {
-                            NSWorkspace.shared.open(url)
-                        }
-                    } label: {
-                        Label("Start Screen Sharing", systemImage: "rectangle.on.rectangle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
+                Text("When others connect, they'll see this app")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding()
+        }
+    }
+    
+    // MARK: - Remote Apps Tab
+    
+    private var remoteAppsContent: some View {
+        VStack(spacing: 0) {
+            // Discovery controls
+            discoveryStatusBar
+            
+            Divider()
+            
+            if networkService.discoveredHosts.isEmpty {
+                remoteEmptyState
+            } else {
+                remoteAppsList
+            }
+        }
+    }
+    
+    private var discoveryStatusBar: some View {
+        HStack(spacing: 12) {
+            // Discovery status
+            HStack(spacing: 8) {
+                if networkService.isDiscovering {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 12, height: 12)
+                } else {
+                    Circle()
+                        .fill(Color.secondary.opacity(0.3))
+                        .frame(width: 8, height: 8)
+                }
+                
+                Text(networkService.isDiscovering ? "Searching..." : "Not searching")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            Button {
+                if networkService.isDiscovering {
+                    networkService.stopDiscovery()
+                } else {
+                    networkService.startDiscovery()
+                }
+            } label: {
+                Label(
+                    networkService.isDiscovering ? "Stop" : "Search Network",
+                    systemImage: networkService.isDiscovering ? "stop.fill" : "magnifyingglass"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            
+            Spacer()
+            
+            if !networkService.discoveredHosts.isEmpty {
+                Text("\(networkService.discoveredHosts.count) host\(networkService.discoveredHosts.count == 1 ? "" : "s") found")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            Button {
+                networkService.refreshDiscovery()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .disabled(!networkService.isDiscovering)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(networkService.isDiscovering ? Color.blue.opacity(0.1) : Color.clear)
+        .onAppear {
+            // Auto-start discovery when viewing remote tab
+            if !networkService.isDiscovering {
+                networkService.startDiscovery()
+            }
+        }
+    }
+    
+    private var remoteEmptyState: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            if networkService.isDiscovering {
+                ProgressView()
+                    .scaleEffect(1.2)
+                Text("Searching for streaming apps...")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                Text("Make sure TidalDrift is running on other machines\nwith app sharing enabled")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Image(systemName: "network.slash")
+                    .font(.system(size: 50))
+                    .foregroundColor(.secondary)
+                
+                Text("No Remote Apps Found")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                
+                Text("Click 'Search Network' to discover apps\nbeing shared by other TidalDrift users")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                
+                Button {
+                    networkService.startDiscovery()
+                } label: {
+                    Label("Search Network", systemImage: "magnifyingglass")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            
+            Spacer()
+        }
+        .padding()
+    }
+    
+    private var remoteAppsList: some View {
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                ForEach(networkService.discoveredHosts) { host in
+                    RemoteHostSection(host: host)
                 }
             }
             .padding()
@@ -372,23 +518,25 @@ struct AppStreamingView: View {
                 .font(.headline)
             
             Text("""
-            This experimental feature aims to let you stream just a single application instead of your entire desktop.
+            This experimental feature lets you stream individual apps across your network.
             
-            Current Limitations:
-            • Standard VNC/ARD protocols don't support single-app streaming
-            • Requires screen recording permission
-            • Currently shows apps and opens standard screen sharing
+            How it works:
+            1. Enable "Share My Apps" to advertise your apps
+            2. Go to "Remote Apps" to discover apps from other machines
+            3. Click "Connect" to view a remote app
             
-            Future Plans:
-            • Custom streaming protocol
-            • WebRTC-based app streaming
-            • Window-specific capture and broadcast
+            Requirements:
+            • TidalDrift running on both machines
+            • Screen Recording permission granted
+            • Both machines on the same network
+            
+            Note: Connection opens Screen Sharing to the remote Mac with the selected app brought to front.
             """)
             .font(.caption)
             .foregroundColor(.secondary)
         }
         .padding()
-        .frame(width: 300)
+        .frame(width: 320)
     }
     
     private func openScreenRecordingSettings() {
@@ -397,6 +545,95 @@ struct AppStreamingView: View {
         }
     }
 }
+
+// MARK: - Remote Host Section
+
+struct RemoteHostSection: View {
+    let host: StreamingHost
+    @StateObject private var networkService = StreamingNetworkService.shared
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Host header
+            HStack {
+                Image(systemName: "desktopcomputer")
+                    .foregroundColor(.blue)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(host.name)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                    Text(host.ipAddress)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Text("\(host.apps.count) app\(host.apps.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.1))
+                    .cornerRadius(4)
+            }
+            
+            Divider()
+            
+            // Apps from this host
+            ForEach(host.apps) { app in
+                RemoteAppRow(app: app)
+            }
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(12)
+    }
+}
+
+struct RemoteAppRow: View {
+    let app: RemoteStreamableApp
+    @StateObject private var networkService = StreamingNetworkService.shared
+    @State private var isHovered = false
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "app.fill")
+                .foregroundColor(.secondary)
+                .frame(width: 24, height: 24)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(app.name)
+                    .font(.subheadline)
+                
+                Text("\(app.windowCount) window\(app.windowCount == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            Button {
+                networkService.connectToRemoteApp(app)
+            } label: {
+                Label("Connect", systemImage: "play.fill")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(isHovered ? Color.accentColor.opacity(0.1) : Color.clear)
+        .cornerRadius(6)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+    }
+}
+
+// MARK: - Existing Row Components
 
 struct AppRow: View {
     let app: StreamableApp
@@ -475,4 +712,3 @@ struct AppStreamingView_Previews: PreviewProvider {
         AppStreamingView()
     }
 }
-

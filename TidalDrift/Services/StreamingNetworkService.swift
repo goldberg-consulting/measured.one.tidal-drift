@@ -1,0 +1,498 @@
+import Foundation
+import Network
+import Combine
+
+/// Represents a remote app available for streaming from another machine
+struct RemoteStreamableApp: Identifiable, Hashable, Codable {
+    let id: String  // Unique ID: hostIP-bundleId
+    let name: String
+    let bundleIdentifier: String
+    let windowCount: Int
+    let hostName: String
+    let hostIP: String
+    let port: UInt16
+    
+    static func == (lhs: RemoteStreamableApp, rhs: RemoteStreamableApp) -> Bool {
+        lhs.id == rhs.id
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+/// Represents a remote host advertising streaming apps
+struct StreamingHost: Identifiable, Hashable {
+    let id: String  // IP address
+    let name: String
+    let ipAddress: String
+    let port: UInt16
+    var apps: [RemoteStreamableApp]
+    
+    static func == (lhs: StreamingHost, rhs: StreamingHost) -> Bool {
+        lhs.id == rhs.id
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+/// Service for advertising and discovering streaming apps via Bonjour
+@MainActor
+class StreamingNetworkService: ObservableObject {
+    static let shared = StreamingNetworkService()
+    
+    // Bonjour service type for TidalDrift streaming
+    private let serviceType = "_tidaldrift._tcp"
+    private let serviceDomain = "local."
+    private let streamingPort: UInt16 = 5901
+    
+    // Advertising
+    @Published var isHosting = false
+    @Published var hostedApps: [String] = []  // Bundle IDs of apps being shared
+    private var listener: NWListener?
+    private var advertiser: NWListener?
+    
+    // Discovery
+    @Published var isDiscovering = false
+    @Published var discoveredHosts: [StreamingHost] = []
+    @Published var allRemoteApps: [RemoteStreamableApp] = []
+    private var browser: NWBrowser?
+    private var connections: [String: NWConnection] = [:]
+    
+    private let queue = DispatchQueue(label: "com.tidaldrift.streaming", qos: .userInitiated)
+    
+    private init() {}
+    
+    // MARK: - Hosting (Advertising your apps)
+    
+    /// Start advertising available apps on the network
+    func startHosting(apps: [StreamableApp]) {
+        guard !isHosting else { return }
+        
+        // Convert to shareable format
+        hostedApps = apps.compactMap { $0.bundleIdentifier }
+        
+        do {
+            // Create listener for incoming connections
+            let parameters = NWParameters.tcp
+            parameters.includePeerToPeer = true
+            
+            listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: streamingPort))
+            
+            // Set up TXT record with app info
+            let txtData = createTXTRecord(for: apps)
+            
+            listener?.service = NWListener.Service(
+                name: Host.current().localizedName ?? "TidalDrift",
+                type: serviceType,
+                domain: serviceDomain,
+                txtRecord: txtData
+            )
+            
+            listener?.stateUpdateHandler = { [weak self] state in
+                Task { @MainActor in
+                    switch state {
+                    case .ready:
+                        self?.isHosting = true
+                        #if DEBUG
+                        print("🎬 Streaming host ready, advertising \(apps.count) apps")
+                        #endif
+                    case .failed(let error):
+                        #if DEBUG
+                        print("🎬 Streaming host failed: \(error)")
+                        #endif
+                        self?.isHosting = false
+                    case .cancelled:
+                        self?.isHosting = false
+                    default:
+                        break
+                    }
+                }
+            }
+            
+            listener?.newConnectionHandler = { [weak self] connection in
+                self?.handleIncomingConnection(connection)
+            }
+            
+            listener?.start(queue: queue)
+            
+        } catch {
+            #if DEBUG
+            print("🎬 Failed to start streaming host: \(error)")
+            #endif
+        }
+    }
+    
+    /// Stop advertising
+    func stopHosting() {
+        listener?.cancel()
+        listener = nil
+        isHosting = false
+        hostedApps = []
+    }
+    
+    /// Update the list of hosted apps
+    func updateHostedApps(_ apps: [StreamableApp]) {
+        if isHosting {
+            stopHosting()
+            startHosting(apps: apps)
+        }
+    }
+    
+    private func createTXTRecord(for apps: [StreamableApp]) -> NWTXTRecord {
+        var record = NWTXTRecord()
+        
+        // Add computer name
+        record["name"] = Host.current().localizedName ?? "Mac"
+        
+        // Add app count
+        record["appCount"] = "\(apps.count)"
+        
+        // Add app info (limited to fit in TXT record)
+        for (index, app) in apps.prefix(10).enumerated() {
+            record["app\(index)"] = "\(app.name)|\(app.bundleIdentifier ?? "unknown")|\(app.windows.count)"
+        }
+        
+        return record
+    }
+    
+    nonisolated private func handleIncomingConnection(_ connection: NWConnection) {
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                #if DEBUG
+                print("🎬 Incoming streaming connection ready")
+                #endif
+                // Handle requests for app info or streaming
+                self?.receiveData(on: connection)
+            case .failed(let error):
+                #if DEBUG
+                print("🎬 Connection failed: \(error)")
+                #endif
+            default:
+                break
+            }
+        }
+        connection.start(queue: DispatchQueue(label: "com.tidaldrift.connection"))
+    }
+    
+    nonisolated private func receiveData(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            if let data = data, !data.isEmpty {
+                self?.handleRequest(data, on: connection)
+            }
+            if !isComplete && error == nil {
+                self?.receiveData(on: connection)
+            }
+        }
+    }
+    
+    nonisolated private func handleRequest(_ data: Data, on connection: NWConnection) {
+        // Simple protocol: send back list of apps as JSON
+        if let request = String(data: data, encoding: .utf8), request == "LIST_APPS" {
+            Task { @MainActor in
+                let apps = AppStreamingService.shared.availableApps
+                let response = apps.map { app in
+                    ["name": app.name, 
+                     "bundleId": app.bundleIdentifier ?? "", 
+                     "windows": app.windows.count] as [String : Any]
+                }
+                if let jsonData = try? JSONSerialization.data(withJSONObject: response) {
+                    connection.send(content: jsonData, completion: .contentProcessed { _ in })
+                }
+            }
+        }
+    }
+    
+    // MARK: - Discovery (Finding remote apps)
+    
+    /// Start discovering streaming hosts on the network
+    func startDiscovery() {
+        guard !isDiscovering else { return }
+        
+        let parameters = NWParameters()
+        parameters.includePeerToPeer = true
+        
+        browser = NWBrowser(for: .bonjour(type: serviceType, domain: serviceDomain), using: parameters)
+        
+        browser?.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor in
+                switch state {
+                case .ready:
+                    self?.isDiscovering = true
+                    #if DEBUG
+                    print("🔍 Streaming discovery started")
+                    #endif
+                case .failed(let error):
+                    #if DEBUG
+                    print("🔍 Streaming discovery failed: \(error)")
+                    #endif
+                    self?.isDiscovering = false
+                default:
+                    break
+                }
+            }
+        }
+        
+        browser?.browseResultsChangedHandler = { [weak self] results, changes in
+            Task { @MainActor in
+                self?.handleDiscoveryResults(results)
+            }
+        }
+        
+        browser?.start(queue: queue)
+    }
+    
+    /// Stop discovery
+    func stopDiscovery() {
+        browser?.cancel()
+        browser = nil
+        isDiscovering = false
+        
+        // Close all connections
+        for (_, connection) in connections {
+            connection.cancel()
+        }
+        connections.removeAll()
+    }
+    
+    /// Refresh discovery
+    func refreshDiscovery() {
+        stopDiscovery()
+        discoveredHosts = []
+        allRemoteApps = []
+        startDiscovery()
+    }
+    
+    private func handleDiscoveryResults(_ results: Set<NWBrowser.Result>) {
+        for result in results {
+            switch result.endpoint {
+            case .service(let name, let type, let domain, _):
+                #if DEBUG
+                print("🔍 Found streaming host: \(name) (\(type).\(domain))")
+                #endif
+                resolveAndConnect(result: result, serviceName: name)
+            default:
+                break
+            }
+        }
+    }
+    
+    private func resolveAndConnect(result: NWBrowser.Result, serviceName: String) {
+        let connection = NWConnection(to: result.endpoint, using: .tcp)
+        
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                // Get the resolved IP address
+                if let endpoint = connection.currentPath?.remoteEndpoint,
+                   case .hostPort(let host, let port) = endpoint {
+                    let ipAddress = self?.extractIP(from: host) ?? "unknown"
+                    
+                    Task { @MainActor in
+                        // Parse TXT record for app info
+                        if case .bonjour(let txtRecord) = result.metadata {
+                            self?.processDiscoveredHost(
+                                name: serviceName,
+                                ipAddress: ipAddress,
+                                port: port.rawValue,
+                                txtRecord: txtRecord
+                            )
+                        }
+                    }
+                }
+                
+                // Request app list
+                let request = "LIST_APPS".data(using: .utf8)!
+                connection.send(content: request, completion: .contentProcessed { _ in })
+                
+                // Receive response
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
+                    if let data = data {
+                        Task { @MainActor in
+                            self?.processAppListResponse(data, from: serviceName)
+                        }
+                    }
+                }
+                
+            case .failed(let error):
+                #if DEBUG
+                print("🔍 Failed to connect to \(serviceName): \(error)")
+                #endif
+            default:
+                break
+            }
+        }
+        
+        connections[serviceName] = connection
+        connection.start(queue: queue)
+    }
+    
+    nonisolated private func extractIP(from host: NWEndpoint.Host) -> String {
+        switch host {
+        case .ipv4(let addr):
+            return "\(addr)"
+        case .ipv6(let addr):
+            return "\(addr)"
+        case .name(let name, _):
+            return name
+        @unknown default:
+            return "unknown"
+        }
+    }
+    
+    private func processDiscoveredHost(name: String, ipAddress: String, port: UInt16, txtRecord: NWTXTRecord) {
+        // Skip if this is our own machine
+        if isOwnMachine(ipAddress: ipAddress) { return }
+        
+        var apps: [RemoteStreamableApp] = []
+        
+        // Parse app info from TXT record
+        let appCountStr = txtRecord["appCount"] ?? "0"
+        let appCount = Int(appCountStr) ?? 0
+        
+        for i in 0..<appCount {
+            if let appInfo = txtRecord["app\(i)"] {
+                let parts = appInfo.split(separator: "|")
+                if parts.count >= 3 {
+                    let appName = String(parts[0])
+                    let bundleId = String(parts[1])
+                    let windowCount = Int(parts[2]) ?? 0
+                    
+                    let app = RemoteStreamableApp(
+                        id: "\(ipAddress)-\(bundleId)",
+                        name: appName,
+                        bundleIdentifier: bundleId,
+                        windowCount: windowCount,
+                        hostName: name,
+                        hostIP: ipAddress,
+                        port: port
+                    )
+                    apps.append(app)
+                }
+            }
+        }
+        
+        // Update or add host
+        if let index = discoveredHosts.firstIndex(where: { $0.ipAddress == ipAddress }) {
+            discoveredHosts[index].apps = apps
+        } else {
+            let host = StreamingHost(
+                id: ipAddress,
+                name: name,
+                ipAddress: ipAddress,
+                port: port,
+                apps: apps
+            )
+            discoveredHosts.append(host)
+        }
+        
+        // Update flat list of all apps
+        updateAllRemoteApps()
+        
+        #if DEBUG
+        print("🔍 Discovered host: \(name) at \(ipAddress) with \(apps.count) apps")
+        #endif
+    }
+    
+    private func processAppListResponse(_ data: Data, from hostName: String) {
+        Task { @MainActor in
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                return
+            }
+            
+            // Find the host
+            guard let hostIndex = discoveredHosts.firstIndex(where: { $0.name == hostName }) else {
+                return
+            }
+            
+            var updatedApps: [RemoteStreamableApp] = []
+            let host = discoveredHosts[hostIndex]
+            
+            for appInfo in json {
+                if let name = appInfo["name"] as? String,
+                   let bundleId = appInfo["bundleId"] as? String,
+                   let windows = appInfo["windows"] as? Int {
+                    let app = RemoteStreamableApp(
+                        id: "\(host.ipAddress)-\(bundleId)",
+                        name: name,
+                        bundleIdentifier: bundleId,
+                        windowCount: windows,
+                        hostName: host.name,
+                        hostIP: host.ipAddress,
+                        port: host.port
+                    )
+                    updatedApps.append(app)
+                }
+            }
+            
+            discoveredHosts[hostIndex].apps = updatedApps
+            updateAllRemoteApps()
+        }
+    }
+    
+    private func updateAllRemoteApps() {
+        allRemoteApps = discoveredHosts.flatMap { $0.apps }
+    }
+    
+    private func isOwnMachine(ipAddress: String) -> Bool {
+        // Get local IPs
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return false }
+        defer { freeifaddrs(ifaddr) }
+        
+        for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
+            let interface = ptr.pointee
+            let addrFamily = interface.ifa_addr.pointee.sa_family
+            
+            if addrFamily == UInt8(AF_INET) {
+                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+                          &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+                let localIP = String(cString: hostname)
+                if localIP == ipAddress {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+    
+    // MARK: - Connecting to Remote Apps
+    
+    /// Connect to view a remote app (opens screen sharing focused on that app)
+    func connectToRemoteApp(_ app: RemoteStreamableApp) {
+        // For now, open standard screen sharing to the remote machine
+        // The remote machine should bring the app to front
+        let vncURL = "vnc://\(app.hostIP)"
+        if let url = URL(string: vncURL) {
+            NSWorkspace.shared.open(url)
+        }
+        
+        // Send request to bring app to front on remote machine
+        sendBringToFrontRequest(app: app)
+    }
+    
+    private func sendBringToFrontRequest(app: RemoteStreamableApp) {
+        let endpoint = NWEndpoint.hostPort(
+            host: NWEndpoint.Host(app.hostIP),
+            port: NWEndpoint.Port(integerLiteral: app.port)
+        )
+        
+        let connection = NWConnection(to: endpoint, using: .tcp)
+        connection.stateUpdateHandler = { state in
+            if case .ready = state {
+                let request = "FOCUS|\(app.bundleIdentifier)".data(using: .utf8)!
+                connection.send(content: request, completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+            }
+        }
+        connection.start(queue: queue)
+    }
+}
+
+import AppKit
+
