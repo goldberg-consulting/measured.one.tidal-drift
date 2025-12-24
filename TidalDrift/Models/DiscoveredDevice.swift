@@ -88,6 +88,16 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
         Date().timeIntervalSince(lastSeen) < 60
     }
     
+    /// Device hasn't been seen in 24+ hours
+    var isStale: Bool {
+        Date().timeIntervalSince(lastSeen) > 24 * 60 * 60
+    }
+    
+    /// Device was seen in this session (within the last 5 minutes)
+    var isRecentlyConfirmed: Bool {
+        Date().timeIntervalSince(lastSeen) < 5 * 60
+    }
+    
     var statusText: String {
         if isOnline {
             return "Online"
@@ -95,6 +105,23 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
             let formatter = RelativeDateTimeFormatter()
             formatter.unitsStyle = .abbreviated
             return "Last seen \(formatter.localizedString(for: lastSeen, relativeTo: Date()))"
+        }
+    }
+    
+    var lastSeenText: String {
+        let interval = Date().timeIntervalSince(lastSeen)
+        
+        if interval < 60 {
+            return "Just now"
+        } else if interval < 60 * 60 {
+            let mins = Int(interval / 60)
+            return "\(mins)m ago"
+        } else if interval < 24 * 60 * 60 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
         }
     }
     

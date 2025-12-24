@@ -96,9 +96,19 @@ struct DeviceCardView: View {
             HStack(spacing: 6) {
                 StatusIndicator(isOnline: device.isOnline, size: 8)
                 
-                Text(device.isOnline ? "Online" : "Offline")
-                    .font(.caption)
-                    .foregroundColor(device.isOnline ? .green : .secondary)
+                if device.isOnline {
+                    Text("Online")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                } else if device.isStale {
+                    Text("Seen \(device.lastSeenText)")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                } else {
+                    Text("Seen \(device.lastSeenText)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
             
             Button("Connect") {

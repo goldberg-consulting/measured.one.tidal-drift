@@ -14,6 +14,10 @@ class NetworkDiscoveryService: ObservableObject {
     private var pathMonitor: NWPathMonitor?
     private let queue = DispatchQueue(label: "com.tidaldrift.discovery", qos: .userInitiated)
     
+    // Persistence keys
+    private let savedDevicesKey = "com.tidaldrift.savedDevices"
+    private let lastScanDateKey = "com.tidaldrift.lastScanDate"
+    
     // Extended service types for better discovery
     private let serviceTypes: [String] = [
         "_rfb._tcp",           // VNC/Screen Sharing
@@ -27,7 +31,93 @@ class NetworkDiscoveryService: ObservableObject {
     ]
     
     private init() {
+        loadSavedDevices()
         setupNetworkMonitor()
+    }
+    
+    // MARK: - Persistence
+    
+    /// Load previously discovered devices from storage
+    private func loadSavedDevices() {
+        if let data = UserDefaults.standard.data(forKey: savedDevicesKey) {
+            do {
+                let devices = try JSONDecoder().decode([DiscoveredDevice].self, from: data)
+                
+                // Load into cache with IP as key
+                for device in devices {
+                    deviceCache[device.ipAddress] = device
+                }
+                
+                // Update published devices
+                discoveredDevices = devices.sorted { $0.name < $1.name }
+                
+                // Load last scan date
+                if let scanDate = UserDefaults.standard.object(forKey: lastScanDateKey) as? Date {
+                    lastScanDate = scanDate
+                }
+                
+                #if DEBUG
+                print("✅ Loaded \(devices.count) saved devices")
+                #endif
+            } catch {
+                #if DEBUG
+                print("❌ Failed to load saved devices: \(error)")
+                #endif
+            }
+        }
+    }
+    
+    /// Save current devices to storage
+    private func saveDevices() {
+        do {
+            let devices = Array(deviceCache.values)
+            let data = try JSONEncoder().encode(devices)
+            UserDefaults.standard.set(data, forKey: savedDevicesKey)
+            
+            if let scanDate = lastScanDate {
+                UserDefaults.standard.set(scanDate, forKey: lastScanDateKey)
+            }
+            
+            #if DEBUG
+            print("💾 Saved \(devices.count) devices")
+            #endif
+        } catch {
+            #if DEBUG
+            print("❌ Failed to save devices: \(error)")
+            #endif
+        }
+    }
+    
+    /// Clear all saved devices
+    func clearSavedDevices() {
+        deviceCache.removeAll()
+        discoveredDevices.removeAll()
+        lastScanDate = nil
+        UserDefaults.standard.removeObject(forKey: savedDevicesKey)
+        UserDefaults.standard.removeObject(forKey: lastScanDateKey)
+    }
+    
+    /// Check if a device is stale (not seen recently)
+    func isDeviceStale(_ device: DiscoveredDevice) -> Bool {
+        let staleThreshold: TimeInterval = 24 * 60 * 60 // 24 hours
+        return Date().timeIntervalSince(device.lastSeen) > staleThreshold
+    }
+    
+    /// Remove a specific device by IP
+    func removeDevice(ipAddress: String) {
+        deviceCache.removeValue(forKey: ipAddress)
+        updatePublishedDevices()
+        saveDevices()
+    }
+    
+    /// Remove all stale devices
+    func removeStaleDevices() {
+        let staleIPs = deviceCache.filter { isDeviceStale($0.value) }.map { $0.key }
+        for ip in staleIPs {
+            deviceCache.removeValue(forKey: ip)
+        }
+        updatePublishedDevices()
+        saveDevices()
     }
     
     private func setupNetworkMonitor() {
@@ -424,6 +514,8 @@ class NetworkDiscoveryService: ObservableObject {
         let devices = Array(deviceCache.values).sorted { $0.name < $1.name }
         DispatchQueue.main.async {
             self.discoveredDevices = devices
+            // Auto-save when devices change
+            self.saveDevices()
         }
     }
     

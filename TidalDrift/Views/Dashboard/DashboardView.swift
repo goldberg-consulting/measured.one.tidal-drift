@@ -176,6 +176,34 @@ struct DashboardView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 80)
                 .labelsHidden()
+                
+                Menu {
+                    Button {
+                        discoveryService.refreshScan()
+                    } label: {
+                        Label("Refresh Scan", systemImage: "arrow.clockwise")
+                    }
+                    
+                    Divider()
+                    
+                    let staleCount = appState.discoveredDevices.filter { $0.isStale }.count
+                    Button {
+                        discoveryService.removeStaleDevices()
+                    } label: {
+                        Label("Remove Old Devices (\(staleCount))", systemImage: "clock.badge.xmark")
+                    }
+                    .disabled(staleCount == 0)
+                    
+                    Button(role: .destructive) {
+                        discoveryService.clearSavedDevices()
+                    } label: {
+                        Label("Clear All Saved Devices", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                }
+                .menuStyle(.borderlessButton)
             }
             .padding()
             
