@@ -229,6 +229,8 @@ struct PermissionDiagnosticView: View {
         }
     }
     
+    @State private var showScreenSharingFixAlert = false
+    
     private var actionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Quick Actions")
@@ -236,13 +238,30 @@ struct PermissionDiagnosticView: View {
             
             HStack(spacing: 12) {
                 Button {
-                    Task {
-                        await SharingConfigurationService.shared.ensureScreenSharingEnabled()
-                    }
+                    showScreenSharingFixAlert = true
+                    diagnosticService.openScreenSharingSettings()
                 } label: {
                     Label("Fix Screen Sharing", systemImage: "wrench.fill")
                 }
                 .buttonStyle(.bordered)
+                .alert("Fix Screen Sharing", isPresented: $showScreenSharingFixAlert) {
+                    Button("Done") {
+                        Task {
+                            await diagnosticService.runFullDiagnostic()
+                        }
+                    }
+                } message: {
+                    Text("""
+                    In System Settings:
+                    
+                    1. Turn OFF Screen Sharing
+                    2. Wait 3 seconds
+                    3. Turn ON Screen Sharing
+                    
+                    This fixes the "port not listening" issue.
+                    Click Done when complete.
+                    """)
+                }
                 
                 Button {
                     Task {
