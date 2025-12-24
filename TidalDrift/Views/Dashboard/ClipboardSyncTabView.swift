@@ -41,13 +41,6 @@ struct ClipboardSyncTabView: View {
                     Text("Clipboard Sync")
                         .font(.largeTitle)
                         .fontWeight(.bold)
-                    
-                    Text("β")
-                        .font(.caption)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.orange))
-                        .foregroundColor(.white)
                 }
                 
                 Text("Share your clipboard between Macs running TidalDrift")

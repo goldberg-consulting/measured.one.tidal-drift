@@ -87,6 +87,10 @@ class ClipboardSyncService: ObservableObject {
     private let clipboardPort: UInt16 = 51234
     
     private init() {
+        // Default to enabled if not set
+        if UserDefaults.standard.object(forKey: "clipboardSyncEnabled") == nil {
+            UserDefaults.standard.set(true, forKey: "clipboardSyncEnabled")
+        }
         isEnabled = UserDefaults.standard.bool(forKey: "clipboardSyncEnabled")
         if isEnabled {
             startMonitoring()

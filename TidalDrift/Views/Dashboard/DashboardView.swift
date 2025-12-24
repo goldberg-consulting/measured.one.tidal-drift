@@ -65,9 +65,16 @@ struct DashboardView: View {
                     .tag(DashboardSection.appStreaming)
                     .badge(Text("β").foregroundColor(.orange))
                 
-                Label("Clipboard Sync", systemImage: "doc.on.clipboard")
-                    .tag(DashboardSection.clipboardSync)
-                    .badge(ClipboardSyncService.shared.isEnabled ? Text("●").foregroundColor(.green) : Text("β").foregroundColor(.orange))
+                HStack {
+                    Label("Clipboard Sync", systemImage: "doc.on.clipboard")
+                    Spacer()
+                    if ClipboardSyncService.shared.isEnabled {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 8, height: 8)
+                    }
+                }
+                .tag(DashboardSection.clipboardSync)
                 
                 Label("Troubleshooting", systemImage: "wrench.and.screwdriver")
                     .tag(DashboardSection.troubleshooting)

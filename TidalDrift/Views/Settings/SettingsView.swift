@@ -131,6 +131,7 @@ struct MaintenanceSettingsView: View {
 
 struct GeneralSettingsView: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject private var clipboardService = ClipboardSyncService.shared
     
     var body: some View {
         Form {
@@ -140,6 +141,14 @@ struct GeneralSettingsView: View {
                 Toggle("Show menu bar icon", isOn: $appState.settings.showMenuBarIcon)
                 
                 Toggle("Show notifications", isOn: $appState.settings.showNotifications)
+            }
+            
+            Section("Clipboard") {
+                Toggle("Sync clipboard between Macs", isOn: $clipboardService.isEnabled)
+                
+                Text("When enabled, anything you copy will be available on other Macs running TidalDrift on your network.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             
             Section {
