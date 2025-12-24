@@ -7,3 +7,26 @@ channel = "stable-24_05"
 
 [agent]
 expertMode = true
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Project Info"
+
+[[workflows.workflow]]
+name = "Project Info"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "echo \"=== TidalDrift - macOS Network Sharing App ===\" && echo \"\" && echo \"This is a native macOS application source code project.\" && echo \"It cannot be compiled on Replit (Linux) - open in Xcode on macOS.\" && echo \"\" && echo \"=== Project Structure ===\" && find TidalDrift -name \"*.swift\" | head -30 && echo \"\" && echo \"=== To Use: ===\" && echo \"1. Download the TidalDrift folder\" && echo \"2. Open on Mac with Xcode 15+\" && echo \"3. Create new macOS App project\" && echo \"4. Import all source files\" && echo \"5. Build and run\""
+
+[workflows.workflow.metadata]
+outputType = "console"
