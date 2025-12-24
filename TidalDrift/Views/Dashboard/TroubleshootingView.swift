@@ -9,6 +9,8 @@ struct TroubleshootingView: View {
             VStack(alignment: .leading, spacing: 24) {
                 headerSection
                 
+                manualSettingsSection
+                
                 quickFixSection
                 
                 howItWorksSection
@@ -16,8 +18,6 @@ struct TroubleshootingView: View {
                 whyThingsBreakSection
                 
                 experimentalFeaturesSection
-                
-                manualSettingsSection
             }
             .padding(24)
         }

@@ -2,7 +2,6 @@ import SwiftUI
 
 struct StatusCardView: View {
     @EnvironmentObject var appState: AppState
-    @State private var showQRCode: Bool = false
     @State private var isTogglingScreen: Bool = false
     @State private var isTogglingFile: Bool = false
     
@@ -83,39 +82,12 @@ struct StatusCardView: View {
                         .frame(width: 6, height: 6)
                 }
             }
-            
-            HStack(spacing: 8) {
-                Button("System Settings") {
-                    SharingConfigurationService.shared.openSharingPreferences()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                
-                Button("Fix Sharing") {
-                    Task {
-                        _ = await SharingConfigurationService.shared.restartScreenSharing()
-                        await appState.checkSharingStatus()
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Restart screen sharing service if connections are failing")
-                
-                Button("QR Code") {
-                    showQRCode = true
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
         }
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
-        .sheet(isPresented: $showQRCode) {
-            QRCodeSheet(ipAddress: appState.localIPAddress)
-        }
         .onAppear {
             appState.refreshLocalInfo()
         }
