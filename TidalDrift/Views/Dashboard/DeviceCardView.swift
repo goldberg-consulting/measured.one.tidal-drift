@@ -16,7 +16,7 @@ struct DeviceCardView: View {
                         .fill(
                             LinearGradient(
                                 colors: device.isTidalDriftPeer 
-                                    ? [.blue.opacity(0.3), .purple.opacity(0.2)]
+                                    ? [Color.tidalDriftPeer.opacity(0.3), Color.tidalDriftPeer.opacity(0.15)]
                                     : [.accentColor.opacity(0.2), .accentColor.opacity(0.1)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -26,14 +26,14 @@ struct DeviceCardView: View {
                     
                     Image(systemName: device.deviceIcon)
                         .font(.system(size: 26))
-                        .foregroundColor(device.isTidalDriftPeer ? .blue : .accentColor)
+                        .foregroundColor(device.isTidalDriftPeer ? .tidalDriftPeer : .accentColor)
                 }
                 
                 // TidalDrift peer badge
                 if device.isTidalDriftPeer {
                     Image(systemName: "wave.3.right.circle.fill")
                         .font(.system(size: 18))
-                        .foregroundColor(.blue)
+                        .foregroundColor(.tidalDriftPeer)
                         .background(Circle().fill(Color(nsColor: .controlBackgroundColor)).padding(-2))
                         .offset(x: 4, y: 4)
                 }
@@ -53,7 +53,7 @@ struct DeviceCardView: View {
                 if device.isTidalDriftPeer, let model = device.peerModelName, !model.isEmpty {
                     Text(model)
                         .font(.caption2)
-                        .foregroundColor(.blue)
+                        .foregroundColor(.tidalDriftPeer)
                         .lineLimit(1)
                 }
             }
@@ -121,14 +121,18 @@ struct DeviceCardView: View {
         .frame(minWidth: 170, maxWidth: 220)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(device.isTidalDriftPeer 
+                    ? Color.tidalDriftPeer.opacity(0.05)
+                    : Color(nsColor: .controlBackgroundColor))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16)
-                        .stroke(device.isTidalDriftPeer ? Color.blue.opacity(0.3) : Color.clear, lineWidth: 2)
+                        .stroke(device.isTidalDriftPeer ? Color.tidalDriftPeerGlow : Color.clear, lineWidth: 2)
                 )
                 .shadow(
-                    color: isHovering ? (device.isTidalDriftPeer ? .blue.opacity(0.3) : .accentColor.opacity(0.2)) : .black.opacity(0.1),
-                    radius: isHovering ? 12 : 6,
+                    color: isHovering 
+                        ? (device.isTidalDriftPeer ? Color.tidalDriftPeer.opacity(0.4) : .accentColor.opacity(0.2)) 
+                        : (device.isTidalDriftPeer ? Color.tidalDriftPeer.opacity(0.2) : .black.opacity(0.1)),
+                    radius: isHovering ? 12 : (device.isTidalDriftPeer ? 8 : 6),
                     x: 0,
                     y: isHovering ? 6 : 3
                 )
@@ -165,9 +169,9 @@ struct TidalDriftBadge: View {
         .padding(.vertical, 3)
         .background(
             Capsule()
-                .fill(Color.blue.opacity(0.2))
+                .fill(Color.tidalDriftPeerLight)
         )
-        .foregroundColor(.blue)
+        .foregroundColor(.tidalDriftPeer)
     }
 }
 

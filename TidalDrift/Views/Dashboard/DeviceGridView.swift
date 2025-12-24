@@ -1,5 +1,12 @@
 import SwiftUI
 
+// Soft red/coral color for TidalDrift peers
+extension Color {
+    static let tidalDriftPeer = Color(red: 0.9, green: 0.3, blue: 0.35)
+    static let tidalDriftPeerLight = Color(red: 0.95, green: 0.4, blue: 0.4).opacity(0.15)
+    static let tidalDriftPeerGlow = Color(red: 0.95, green: 0.35, blue: 0.4).opacity(0.3)
+}
+
 struct DeviceGridView: View {
     let devices: [DiscoveredDevice]
     let onSelect: (DiscoveredDevice) -> Void
@@ -8,11 +15,59 @@ struct DeviceGridView: View {
         GridItem(.adaptive(minimum: 160, maximum: 200), spacing: 16)
     ]
     
+    private var tidalDriftPeers: [DiscoveredDevice] {
+        devices.filter { $0.isTidalDriftPeer }
+    }
+    
+    private var otherDevices: [DiscoveredDevice] {
+        devices.filter { !$0.isTidalDriftPeer }
+    }
+    
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 16) {
-            ForEach(devices) { device in
-                DeviceCardView(device: device) {
-                    onSelect(device)
+        VStack(alignment: .leading, spacing: 16) {
+            // TidalDrift peers section
+            if !tidalDriftPeers.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "wave.3.right")
+                            .foregroundColor(.tidalDriftPeer)
+                        Text("TidalDrift Peers")
+                            .font(.headline)
+                            .foregroundColor(.tidalDriftPeer)
+                        Text("(\(tidalDriftPeers.count))")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(tidalDriftPeers) { device in
+                            DeviceCardView(device: device) {
+                                onSelect(device)
+                            }
+                        }
+                    }
+                }
+                
+                if !otherDevices.isEmpty {
+                    Divider()
+                        .padding(.vertical, 8)
+                }
+            }
+            
+            // Other devices section
+            if !otherDevices.isEmpty {
+                if !tidalDriftPeers.isEmpty {
+                    Text("Other Devices")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                }
+                
+                LazyVGrid(columns: columns, spacing: 16) {
+                    ForEach(otherDevices) { device in
+                        DeviceCardView(device: device) {
+                            onSelect(device)
+                        }
+                    }
                 }
             }
         }
@@ -23,11 +78,52 @@ struct DeviceListView: View {
     let devices: [DiscoveredDevice]
     let onSelect: (DiscoveredDevice) -> Void
     
+    private var tidalDriftPeers: [DiscoveredDevice] {
+        devices.filter { $0.isTidalDriftPeer }
+    }
+    
+    private var otherDevices: [DiscoveredDevice] {
+        devices.filter { !$0.isTidalDriftPeer }
+    }
+    
     var body: some View {
-        LazyVStack(spacing: 8) {
-            ForEach(devices) { device in
-                DeviceListRowView(device: device) {
-                    onSelect(device)
+        VStack(alignment: .leading, spacing: 12) {
+            // TidalDrift peers section
+            if !tidalDriftPeers.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "wave.3.right")
+                            .foregroundColor(.tidalDriftPeer)
+                        Text("TidalDrift Peers")
+                            .font(.headline)
+                            .foregroundColor(.tidalDriftPeer)
+                    }
+                    
+                    ForEach(tidalDriftPeers) { device in
+                        DeviceListRowView(device: device) {
+                            onSelect(device)
+                        }
+                    }
+                }
+                
+                if !otherDevices.isEmpty {
+                    Divider()
+                        .padding(.vertical, 4)
+                }
+            }
+            
+            // Other devices
+            if !otherDevices.isEmpty {
+                if !tidalDriftPeers.isEmpty {
+                    Text("Other Devices")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+                
+                ForEach(otherDevices) { device in
+                    DeviceListRowView(device: device) {
+                        onSelect(device)
+                    }
                 }
             }
         }
@@ -46,13 +142,13 @@ struct DeviceListRowView: View {
             ZStack(alignment: .bottomTrailing) {
                 Image(systemName: device.deviceIcon)
                     .font(.title2)
-                    .foregroundColor(device.isTidalDriftPeer ? .blue : .accentColor)
+                    .foregroundColor(device.isTidalDriftPeer ? .tidalDriftPeer : .accentColor)
                     .frame(width: 40)
                 
                 if device.isTidalDriftPeer {
                     Image(systemName: "wave.3.right.circle.fill")
                         .font(.system(size: 12))
-                        .foregroundColor(.blue)
+                        .foregroundColor(.tidalDriftPeer)
                         .background(Circle().fill(Color(nsColor: .windowBackgroundColor)).padding(-1))
                         .offset(x: 4, y: 4)
                 }
@@ -69,8 +165,8 @@ struct DeviceListRowView: View {
                             .fontWeight(.medium)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.blue.opacity(0.15)))
-                            .foregroundColor(.blue)
+                            .background(Capsule().fill(Color.tidalDriftPeerLight))
+                            .foregroundColor(.tidalDriftPeer)
                     }
                 }
                 
@@ -84,7 +180,7 @@ struct DeviceListRowView: View {
                             .foregroundColor(.secondary)
                         Text(model)
                             .font(.caption)
-                            .foregroundColor(.blue)
+                            .foregroundColor(.tidalDriftPeer)
                     }
                     
                     if device.isTidalDriftPeer, let user = device.peerUserName, !user.isEmpty {
@@ -135,13 +231,14 @@ struct DeviceListRowView: View {
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(isHovering 
-                    ? (device.isTidalDriftPeer ? Color.blue.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
-                    : (device.isTidalDriftPeer ? Color.blue.opacity(0.05) : Color.clear))
+                    ? (device.isTidalDriftPeer ? Color.tidalDriftPeer.opacity(0.1) : Color(nsColor: .controlBackgroundColor))
+                    : (device.isTidalDriftPeer ? Color.tidalDriftPeer.opacity(0.05) : Color.clear))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(device.isTidalDriftPeer ? Color.blue.opacity(0.2) : Color.clear, lineWidth: 1)
+                .stroke(device.isTidalDriftPeer ? Color.tidalDriftPeerGlow : Color.clear, lineWidth: 1.5)
         )
+        .shadow(color: device.isTidalDriftPeer ? Color.tidalDriftPeer.opacity(0.2) : .clear, radius: 4, x: 0, y: 0)
         .onHover { hovering in
             isHovering = hovering
         }

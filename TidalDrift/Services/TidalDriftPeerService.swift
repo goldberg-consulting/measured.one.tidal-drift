@@ -166,24 +166,100 @@ class TidalDriftPeerService: ObservableObject {
     }
     
     private func handleBrowseResults(_ results: Set<NWBrowser.Result>) {
+        print("🌊 TidalDrift: Found \(results.count) peer results")
+        
         for result in results {
             switch result.endpoint {
-            case .service(let name, _, _, _):
+            case .service(let name, let type, let domain, let interface):
+                print("🌊 TidalDrift: Found service: \(name) type=\(type) domain=\(domain)")
+                
                 // Skip ourselves
-                if name == localInfo.hostname { continue }
+                if name == localInfo.hostname {
+                    print("🌊 TidalDrift: Skipping self: \(name)")
+                    continue
+                }
                 
                 // Extract TXT record data
                 if case .bonjour(let txtRecord) = result.metadata {
-                    let peer = parseTXTRecord(txtRecord, name: name)
-                    DispatchQueue.main.async {
-                        self.discoveredPeers[name] = peer
-                        // Notify NetworkDiscoveryService about this peer
-                        self.notifyNetworkDiscovery(peer: peer)
+                    var peer = parseTXTRecord(txtRecord, name: name)
+                    
+                    // Resolve the IP address
+                    resolveEndpoint(result.endpoint) { [weak self] ipAddress in
+                        if let ip = ipAddress {
+                            // Create updated peer with IP
+                            let updatedPeer = PeerInfo(
+                                hostname: peer.hostname,
+                                ipAddress: ip,
+                                modelName: peer.modelName,
+                                modelIdentifier: peer.modelIdentifier,
+                                processorInfo: peer.processorInfo,
+                                memoryGB: peer.memoryGB,
+                                macOSVersion: peer.macOSVersion,
+                                userName: peer.userName,
+                                uptimeHours: peer.uptimeHours,
+                                tidalDriftVersion: peer.tidalDriftVersion,
+                                screenSharingEnabled: peer.screenSharingEnabled,
+                                fileSharingEnabled: peer.fileSharingEnabled
+                            )
+                            
+                            DispatchQueue.main.async {
+                                self?.discoveredPeers[name] = updatedPeer
+                                self?.notifyNetworkDiscovery(peer: updatedPeer)
+                                print("🌊 TidalDrift: Added peer \(name) at IP \(ip)")
+                            }
+                        } else {
+                            DispatchQueue.main.async {
+                                self?.discoveredPeers[name] = peer
+                                self?.notifyNetworkDiscovery(peer: peer)
+                                print("🌊 TidalDrift: Added peer \(name) (no IP resolved)")
+                            }
+                        }
                     }
+                } else {
+                    print("🌊 TidalDrift: No TXT record for \(name)")
                 }
                 
             default:
                 break
+            }
+        }
+    }
+    
+    private func resolveEndpoint(_ endpoint: NWEndpoint, completion: @escaping (String?) -> Void) {
+        let connection = NWConnection(to: endpoint, using: .tcp)
+        
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                if case .hostPort(let host, _) = connection.currentPath?.remoteEndpoint {
+                    if case .ipv4(let ipv4) = host {
+                        let ip = ipv4.debugDescription
+                        connection.cancel()
+                        completion(ip)
+                        return
+                    } else if case .ipv6(let ipv6) = host {
+                        let ip = ipv6.debugDescription
+                        connection.cancel()
+                        completion(ip)
+                        return
+                    }
+                }
+                connection.cancel()
+                completion(nil)
+            case .failed, .cancelled:
+                completion(nil)
+            default:
+                break
+            }
+        }
+        
+        connection.start(queue: .global(qos: .userInitiated))
+        
+        // Timeout after 2 seconds
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+            if connection.state != .ready && connection.state != .cancelled {
+                connection.cancel()
+                completion(nil)
             }
         }
     }
@@ -298,10 +374,19 @@ class TidalDriftPeerService: ObservableObject {
 extension NetworkDiscoveryService {
     func markAsTidalDriftPeer(hostname: String, peerInfo: TidalDriftPeerService.PeerInfo) {
         DispatchQueue.main.async {
-            // Find matching device by hostname or name
-            if let index = self.discoveredDevices.firstIndex(where: { 
-                $0.hostname.lowercased().contains(hostname.lowercased()) ||
-                $0.name.lowercased() == hostname.lowercased()
+            // Try to find matching device by hostname, name, or IP address
+            let normalizedHostname = hostname.lowercased().replacingOccurrences(of: ".local", with: "")
+            
+            if let index = self.discoveredDevices.firstIndex(where: { device in
+                let deviceName = device.name.lowercased()
+                let deviceHostname = device.hostname.lowercased().replacingOccurrences(of: ".local", with: "")
+                let deviceIP = device.ipAddress
+                
+                return deviceName == normalizedHostname ||
+                       deviceHostname == normalizedHostname ||
+                       deviceName.contains(normalizedHostname) ||
+                       normalizedHostname.contains(deviceName) ||
+                       (!peerInfo.ipAddress.isEmpty && deviceIP == peerInfo.ipAddress)
             }) {
                 var device = self.discoveredDevices[index]
                 device.isTidalDriftPeer = true
@@ -312,16 +397,22 @@ extension NetworkDiscoveryService {
                 device.peerMacOSVersion = peerInfo.macOSVersion
                 device.peerUserName = peerInfo.userName
                 device.peerUptimeHours = peerInfo.uptimeHours
-                self.discoveredDevices[index] = device
                 
-                print("🌊 Marked \(hostname) as TidalDrift peer")
+                // Update IP if we have a resolved one
+                if !peerInfo.ipAddress.isEmpty && peerInfo.ipAddress != "Resolving..." {
+                    device.ipAddress = peerInfo.ipAddress
+                }
+                
+                self.discoveredDevices[index] = device
+                print("🌊 Marked \(device.name) as TidalDrift peer (matched from \(hostname))")
             } else {
                 // Create a new device entry for this TidalDrift peer
+                let displayName = hostname.replacingOccurrences(of: ".local", with: "")
                 let newDevice = DiscoveredDevice(
-                    name: hostname,
-                    hostname: "\(hostname).local",
+                    name: displayName,
+                    hostname: hostname.hasSuffix(".local") ? hostname : "\(hostname).local",
                     ipAddress: peerInfo.ipAddress.isEmpty ? "Resolving..." : peerInfo.ipAddress,
-                    services: [],
+                    services: peerInfo.screenSharingEnabled ? [.screenSharing] : [],
                     lastSeen: Date(),
                     isTrusted: false,
                     isTidalDriftPeer: true,
@@ -334,7 +425,7 @@ extension NetworkDiscoveryService {
                     peerUptimeHours: peerInfo.uptimeHours
                 )
                 self.discoveredDevices.append(newDevice)
-                print("🌊 Added new TidalDrift peer: \(hostname)")
+                print("🌊 Added new TidalDrift peer: \(displayName)")
             }
         }
     }

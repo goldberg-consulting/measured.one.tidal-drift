@@ -31,6 +31,7 @@
         <string>_rfb._tcp</string>
         <string>_smb._tcp</string>
         <string>_afpovertcp._tcp</string>
+        <string>_tidaldrift._tcp</string>
     </array>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2024. All rights reserved.</string>
