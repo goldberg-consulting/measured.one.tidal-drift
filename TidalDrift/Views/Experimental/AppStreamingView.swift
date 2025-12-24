@@ -22,7 +22,7 @@ struct AppStreamingView: View {
                 enabledContent
             }
         }
-        .frame(minWidth: 500, minHeight: 550)
+        .frame(width: 700, height: 600)
         .alert("Screen Recording Permission Required", isPresented: $showingPermissionAlert) {
             Button("Open System Settings") {
                 openScreenRecordingSettings()
@@ -156,11 +156,15 @@ struct AppStreamingView: View {
             
             Divider()
             
-            if selectedTab == 0 {
+            // Use TabView with fixed frame to prevent size jumping
+            TabView(selection: $selectedTab) {
                 localAppsContent
-            } else {
+                    .tag(0)
+                
                 remoteAppsContent
+                    .tag(1)
             }
+            .tabViewStyle(.automatic)
         }
     }
     
@@ -185,7 +189,7 @@ struct AppStreamingView: View {
     
     private var hostingStatusBar: some View {
         HStack(spacing: 12) {
-            // Hosting toggle
+            // Hosting status
             HStack(spacing: 8) {
                 Circle()
                     .fill(networkService.isHosting ? Color.green : Color.secondary.opacity(0.3))
@@ -196,18 +200,30 @@ struct AppStreamingView: View {
                     .foregroundColor(networkService.isHosting ? .primary : .secondary)
             }
             
-            Toggle("Share My Apps", isOn: Binding(
-                get: { networkService.isHosting },
-                set: { enabled in
-                    if enabled {
-                        networkService.startHosting(apps: service.availableApps)
-                    } else {
-                        networkService.stopHosting()
+            // Use button instead of toggle for more reliable behavior
+            if networkService.isHosting {
+                Button {
+                    networkService.stopHosting()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "stop.fill")
+                        Text("Stop Sharing")
                     }
                 }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.small)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            } else {
+                Button {
+                    networkService.startHosting(apps: service.availableApps)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                        Text("Share My Apps")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
             
             Spacer()
             
