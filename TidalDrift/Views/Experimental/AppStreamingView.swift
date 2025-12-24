@@ -22,7 +22,8 @@ struct AppStreamingView: View {
                 enabledContent
             }
         }
-        .frame(width: 700, height: 600)
+        .frame(minWidth: 650, idealWidth: 700, maxWidth: 800, 
+               minHeight: 550, idealHeight: 600, maxHeight: 700)
         .alert("Screen Recording Permission Required", isPresented: $showingPermissionAlert) {
             Button("Open System Settings") {
                 openScreenRecordingSettings()
@@ -156,15 +157,15 @@ struct AppStreamingView: View {
             
             Divider()
             
-            // Use TabView with fixed frame to prevent size jumping
-            TabView(selection: $selectedTab) {
+            // Fixed frame container to prevent size changes
+            ZStack {
                 localAppsContent
-                    .tag(0)
+                    .opacity(selectedTab == 0 ? 1 : 0)
                 
                 remoteAppsContent
-                    .tag(1)
+                    .opacity(selectedTab == 1 ? 1 : 0)
             }
-            .tabViewStyle(.automatic)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
     
