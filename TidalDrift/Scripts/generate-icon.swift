@@ -43,13 +43,13 @@ func drawWaveIcon(in context: CGContext, size: CGFloat) {
                                 options: [])
     context.restoreGState()
     
-    // Draw simple ≈ wave symbol
+    // Draw simple ≈ wave symbol - thin and elegant
     let centerX = iconSize / 2
     let centerY = iconSize / 2
-    let fontSize = drawSize * 0.55
+    let fontSize = drawSize * 0.6
     
-    // Create attributed string with ≈
-    let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+    // Create attributed string with ≈ - ultraLight weight
+    let font = NSFont.systemFont(ofSize: fontSize, weight: .ultraLight)
     let attributes: [NSAttributedString.Key: Any] = [
         .font: font,
         .foregroundColor: NSColor.white
