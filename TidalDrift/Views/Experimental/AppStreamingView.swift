@@ -67,7 +67,8 @@ struct AppStreamingView: View {
                 infoPopover
             }
         }
-        .padding()
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
     }
     
     private var experimentalDisabledView: some View {
@@ -85,7 +86,7 @@ struct AppStreamingView: View {
             Text("App-specific streaming allows you to share just one application window instead of your entire desktop, and discover apps shared by other machines on your network.")
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
-                .padding(.horizontal, 40)
+                .padding(.horizontal, 60)
             
             VStack(spacing: 12) {
                 Toggle("Enable Experimental Features", isOn: Binding(
@@ -101,11 +102,12 @@ struct AppStreamingView: View {
             .padding()
             .background(Color.secondary.opacity(0.1))
             .cornerRadius(12)
-            .padding(.horizontal, 40)
+            .padding(.horizontal, 60)
             
             Spacer()
         }
-        .padding()
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
     }
     
     private var enabledContent: some View {
@@ -474,6 +476,7 @@ struct AppStreamingView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
             } else {
                 Image(systemName: "network.slash")
                     .font(.system(size: 50))
@@ -487,6 +490,7 @@ struct AppStreamingView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
                 
                 Button {
                     networkService.startDiscovery()
@@ -498,7 +502,8 @@ struct AppStreamingView: View {
             
             Spacer()
         }
-        .padding()
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
     }
     
     private var remoteAppsList: some View {
@@ -535,8 +540,8 @@ struct AppStreamingView: View {
             .font(.caption)
             .foregroundColor(.secondary)
         }
-        .padding()
-        .frame(width: 320)
+        .padding(20)
+        .frame(width: 340)
     }
     
     private func openScreenRecordingSettings() {
