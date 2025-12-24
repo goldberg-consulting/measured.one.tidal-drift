@@ -33,6 +33,7 @@
         <string>_afpovertcp._tcp</string>
         <string>_tidaldrift._tcp</string>
         <string>_tidalclip._tcp</string>
+        <string>_tidalstream._tcp</string>
     </array>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2024. All rights reserved.</string>

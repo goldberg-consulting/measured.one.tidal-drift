@@ -8,12 +8,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Auto-start network discovery for screen shares
         NetworkDiscoveryService.shared.startBrowsing()
         // Start TidalDrift peer discovery (advertise + discover other instances)
-        PeerDiscoveryService.shared.start()
+        TidalDriftPeerService.shared.startAdvertising()
+        TidalDriftPeerService.shared.startDiscovery()
     }
     
     func applicationWillTerminate(_ notification: Notification) {
         NetworkDiscoveryService.shared.stopBrowsing()
-        PeerDiscoveryService.shared.stop()
+        TidalDriftPeerService.shared.stopAdvertising()
+        TidalDriftPeerService.shared.stopDiscovery()
     }
     
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

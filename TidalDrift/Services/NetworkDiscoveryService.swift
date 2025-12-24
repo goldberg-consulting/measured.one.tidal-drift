@@ -534,45 +534,71 @@ class NetworkDiscoveryService: ObservableObject {
         updatePublishedDevices()
     }
     
-    /// Mark a device as a TidalDrift peer with enhanced info
-    func markAsTidalDriftPeer(ipAddress: String, peerInfo: PeerDiscoveryService.PeerInfo) {
-        let cacheKey = ipAddress
+    /// Mark a device as a TidalDrift peer with enhanced info from TidalDriftPeerService
+    func markAsTidalDriftPeer(hostname: String, peerInfo: TidalDriftPeerService.PeerInfo) {
+        print("🌊 TidalDrift PEER: Attempting to mark '\(hostname)' at \(peerInfo.ipAddress) as peer")
         
-        if var existingDevice = deviceCache[cacheKey] {
-            // Update existing device with peer info
-            existingDevice.isTidalDriftPeer = true
-            existingDevice.name = peerInfo.computerName
-            existingDevice.peerModelName = peerInfo.modelName
-            existingDevice.peerModelIdentifier = peerInfo.modelIdentifier
-            existingDevice.peerProcessorInfo = peerInfo.processorInfo
-            existingDevice.peerMemoryGB = peerInfo.memoryGB
-            existingDevice.peerMacOSVersion = peerInfo.macOSVersion
-            existingDevice.peerUserName = peerInfo.userName
-            existingDevice.peerUptimeHours = peerInfo.uptimeHours
-            existingDevice.lastSeen = Date()
-            deviceCache[cacheKey] = existingDevice
-        } else {
-            // Create new device with peer info
-            let newDevice = DiscoveredDevice(
-                name: peerInfo.computerName,
-                hostname: "\(peerInfo.computerName).local",
-                ipAddress: ipAddress,
-                services: [.screenSharing], // Assume screen sharing since TidalDrift is running
-                lastSeen: Date(),
-                port: 5900,
-                isTidalDriftPeer: true,
-                peerModelName: peerInfo.modelName,
-                peerModelIdentifier: peerInfo.modelIdentifier,
-                peerProcessorInfo: peerInfo.processorInfo,
-                peerMemoryGB: peerInfo.memoryGB,
-                peerMacOSVersion: peerInfo.macOSVersion,
-                peerUserName: peerInfo.userName,
-                peerUptimeHours: peerInfo.uptimeHours
-            )
-            deviceCache[cacheKey] = newDevice
+        DispatchQueue.main.async {
+            // Try to find matching device by hostname, name, or IP address
+            let normalizedHostname = hostname.lowercased().replacingOccurrences(of: ".local", with: "")
+            
+            if let index = self.discoveredDevices.firstIndex(where: { device in
+                let deviceName = device.name.lowercased()
+                let deviceHostname = device.hostname.lowercased().replacingOccurrences(of: ".local", with: "")
+                let deviceIP = device.ipAddress
+                
+                let matches = deviceName == normalizedHostname ||
+                       deviceHostname == normalizedHostname ||
+                       deviceName.contains(normalizedHostname) ||
+                       normalizedHostname.contains(deviceName) ||
+                       (!peerInfo.ipAddress.isEmpty && deviceIP == peerInfo.ipAddress)
+                
+                if matches {
+                    print("🌊 TidalDrift PEER: Match found for '\(hostname)': \(device.name)")
+                }
+                return matches
+            }) {
+                var device = self.discoveredDevices[index]
+                device.isTidalDriftPeer = true
+                device.peerModelName = peerInfo.modelName
+                device.peerModelIdentifier = peerInfo.modelIdentifier
+                device.peerProcessorInfo = peerInfo.processorInfo
+                device.peerMemoryGB = peerInfo.memoryGB
+                device.peerMacOSVersion = peerInfo.macOSVersion
+                device.peerUserName = peerInfo.userName
+                device.peerUptimeHours = peerInfo.uptimeHours
+                
+                // Update IP if we have a resolved one
+                if !peerInfo.ipAddress.isEmpty {
+                    device.ipAddress = peerInfo.ipAddress
+                }
+                
+                self.deviceCache[device.ipAddress] = device
+                print("🌊 TidalDrift PEER: ✅ Updated existing device '\(device.name)' as peer")
+            } else {
+                // Create a new device entry for this TidalDrift peer
+                let displayName = hostname.replacingOccurrences(of: ".local", with: "")
+                let newDevice = DiscoveredDevice(
+                    name: displayName,
+                    hostname: hostname.hasSuffix(".local") ? hostname : "\(hostname).local",
+                    ipAddress: peerInfo.ipAddress.isEmpty ? "Resolving..." : peerInfo.ipAddress,
+                    services: [.screenSharing],
+                    lastSeen: Date(),
+                    isTrusted: false,
+                    isTidalDriftPeer: true,
+                    peerModelName: peerInfo.modelName,
+                    peerModelIdentifier: peerInfo.modelIdentifier,
+                    peerProcessorInfo: peerInfo.processorInfo,
+                    peerMemoryGB: peerInfo.memoryGB,
+                    peerMacOSVersion: peerInfo.macOSVersion,
+                    peerUserName: peerInfo.userName,
+                    peerUptimeHours: peerInfo.uptimeHours
+                )
+                self.deviceCache[newDevice.ipAddress] = newDevice
+                print("🌊 TidalDrift PEER: ✅ Created new device entry for peer '\(displayName)'")
+            }
+            self.updatePublishedDevices()
         }
-        
-        updatePublishedDevices()
     }
     
     // MARK: - Active IP Scanning (for VPNs and when Bonjour fails)

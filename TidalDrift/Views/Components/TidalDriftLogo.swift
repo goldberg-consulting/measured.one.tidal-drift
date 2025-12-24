@@ -98,12 +98,15 @@ struct TidalDriftLogo: View {
                 .frame(width: size.iconSize, height: size.iconSize)
                 .shadow(color: .blue.opacity(0.4), radius: size.iconSize / 5, x: 0, y: size.iconSize / 10)
             
-            // Simple animated wave ≈ - thin and elegant
-            Text("≈")
-                .font(.system(size: size.iconSize * 0.6, weight: .ultraLight, design: .default))
-                .foregroundColor(.white)
-                .offset(y: sin(waveOffset) * (size.iconSize * 0.04))
-                .scaleEffect(x: 1.0 + sin(waveOffset * 0.5) * 0.03, y: 1.0)
+            // Simple animated waves - thin and elegant
+            VStack(spacing: size.iconSize * 0.1) {
+                ForEach(0..<3) { i in
+                    WaveShape(offset: waveOffset + (CGFloat(i) * 0.5), amplitude: size.iconSize * 0.05)
+                        .stroke(Color.white, lineWidth: size.iconSize * 0.04)
+                        .frame(width: size.iconSize * 0.6, height: size.iconSize * 0.1)
+                }
+            }
+            .offset(y: sin(waveOffset) * (size.iconSize * 0.02))
         }
         .scaleEffect(isAnimating ? 1 : 0.9)
         .opacity(isAnimating ? 1 : 0.5)

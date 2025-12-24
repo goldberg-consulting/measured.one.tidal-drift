@@ -43,33 +43,30 @@ func drawWaveIcon(in context: CGContext, size: CGFloat) {
                                 options: [])
     context.restoreGState()
     
-    // Draw simple ≈ wave symbol - thin and elegant
+    // Draw modern wave icon - clean and sharp
     let centerX = iconSize / 2
     let centerY = iconSize / 2
-    let fontSize = drawSize * 0.6
-    
-    // Create attributed string with ≈ - ultraLight weight
-    let font = NSFont.systemFont(ofSize: fontSize, weight: .ultraLight)
-    let attributes: [NSAttributedString.Key: Any] = [
-        .font: font,
-        .foregroundColor: NSColor.white
-    ]
-    let string = "≈" as NSString
-    let stringSize = string.size(withAttributes: attributes)
-    
-    // Draw centered
-    let x = centerX - stringSize.width / 2
-    let y = centerY - stringSize.height / 2
+    let iconPadding = drawSize * 0.2
+    let iconRect = circleRect.insetBy(dx: iconPadding, dy: iconPadding)
     
     context.saveGState()
-    context.addEllipse(in: circleRect)
-    context.clip()
+    context.setStrokeColor(NSColor.white.cgColor)
+    context.setLineWidth(drawSize * 0.06)
+    context.setLineCap(.round)
+    context.setLineJoin(.round)
     
-    // Flip for text drawing
-    context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+    // Create a clean, sharp three-wave design
+    let wavePath = CGMutablePath()
+    let waveCount = 3
+    for i in 0..<waveCount {
+        let y = iconRect.minY + (iconRect.height / CGFloat(waveCount + 1)) * CGFloat(i + 1)
+        wavePath.move(to: CGPoint(x: iconRect.minX, y: y))
+        wavePath.addQuadCurve(to: CGPoint(x: iconRect.maxX, y: y), 
+                             control: CGPoint(x: centerX, y: y - (iconRect.height * 0.15)))
+    }
     
-    let textRect = CGRect(x: x, y: y + stringSize.height, width: stringSize.width, height: stringSize.height)
-    string.draw(in: textRect, withAttributes: attributes)
+    context.addPath(wavePath)
+    context.strokePath()
     
     context.restoreGState()
 }

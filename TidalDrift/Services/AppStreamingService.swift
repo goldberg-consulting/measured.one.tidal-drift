@@ -251,8 +251,17 @@ class AppStreamingService: ObservableObject {
     
     /// Toggles experimental feature
     func setExperimentalEnabled(_ enabled: Bool) {
+        print("🧪 Toggling experimental app streaming: \(enabled)")
         isExperimentalEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "experimentalAppStreaming")
+        UserDefaults.standard.synchronize() // Force save immediately
+        
+        // Notify others if needed or start/stop services
+        if enabled {
+            Task {
+                await refreshAvailableApps()
+            }
+        }
     }
     
     private func getLocalIPAddress() -> String? {

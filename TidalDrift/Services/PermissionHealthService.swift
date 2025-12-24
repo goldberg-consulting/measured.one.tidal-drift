@@ -41,7 +41,7 @@ class PermissionHealthService: ObservableObject {
         }
         
         // 2. Reset Screen Recording permission (will require re-grant)
-        screenRecordingOK = resetScreenRecording()
+        screenRecordingOK = await resetScreenRecording()
         if screenRecordingOK {
             messages.append("✅ Screen Recording permission reset - please re-grant if prompted")
         } else {
@@ -81,9 +81,24 @@ class PermissionHealthService: ObservableObject {
     }
     
     /// Reset Screen Recording TCC entry
-    func resetScreenRecording() -> Bool {
+    @MainActor
+    func resetScreenRecording() async -> Bool {
+        isResetting = true
+        defer { isResetting = false }
+        
         let result = ShellExecutor.execute("tccutil reset ScreenCapture com.goldbergconsulting.tidaldrift 2>&1")
-        return result.exitCode == 0
+        
+        let success = result.exitCode == 0
+        if success {
+            lastResetResult = ResetResult(
+                timestamp: Date(),
+                screenSharingRestarted: false,
+                screenRecordingReset: true,
+                localNetworkReset: false,
+                message: "✅ Screen Recording permission reset. Please restart the app and grant permission when prompted."
+            )
+        }
+        return success
     }
     
     /// Reset Local Network TCC entry

@@ -44,7 +44,7 @@ class StreamingNetworkService: ObservableObject {
     static let shared = StreamingNetworkService()
     
     // Bonjour service type for TidalDrift streaming
-    private let serviceType = "_tidaldrift._tcp"
+    private let serviceType = "_tidalstream._tcp"
     private let serviceDomain = "local."
     private let streamingPort: UInt16 = 5901
     
@@ -123,7 +123,7 @@ class StreamingNetworkService: ObservableObject {
             listener?.service = NWListener.Service(
                 name: Host.current().localizedName ?? "TidalDrift",
                 type: serviceType,
-                domain: serviceDomain,
+                domain: nil,
                 txtRecord: txtData
             )
             log("🎬 Service configured: \(serviceType) in \(serviceDomain)")

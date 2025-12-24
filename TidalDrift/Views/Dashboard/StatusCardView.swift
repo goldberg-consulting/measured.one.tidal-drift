@@ -39,6 +39,21 @@ struct StatusCardView: View {
                 ) {
                     toggleFileSharing()
                 }
+                
+                HStack {
+                    Text("Peer Discovery")
+                        .font(.caption)
+                    Spacer()
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(TidalDriftPeerService.shared.isAdvertising ? Color.green : Color.orange)
+                            .frame(width: 6, height: 6)
+                        Text(TidalDriftPeerService.shared.isAdvertising ? "Active" : "Off")
+                            .font(.caption)
+                            .foregroundColor(TidalDriftPeerService.shared.isAdvertising ? .green : .orange)
+                    }
+                    .frame(width: 40, alignment: .leading)
+                }
             }
             
             Divider()
@@ -81,6 +96,18 @@ struct StatusCardView: View {
                         .fill(Color.green)
                         .frame(width: 6, height: 6)
                 }
+            }
+            
+            Divider()
+            
+            HStack {
+                Text("Version")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("1.1.2")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
         }
         .padding(12)

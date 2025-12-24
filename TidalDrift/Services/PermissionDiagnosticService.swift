@@ -202,20 +202,18 @@ class PermissionDiagnosticService: ObservableObject {
     }
     
     private func checkScreenRecordingPermission() async -> (granted: Bool, denied: Bool) {
-        // Try to get content - this is the definitive test
-        do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            // If we get windows, permission is granted
-            let hasWindows = !content.windows.isEmpty
-            return (hasWindows, false)
-        } catch let error as NSError {
-            // Error code -3801 means permission denied
-            // Error code -3802 means not determined
-            if error.code == -3801 {
-                return (false, true) // Denied
-            }
-            return (false, false) // Not determined
+        // Use preflight to check WITHOUT triggering a system prompt
+        // This is available on macOS 10.15+
+        let granted = CGPreflightScreenCaptureAccess()
+        
+        if granted {
+            return (true, false)
         }
+        
+        // If preflight fails, we return false. 
+        // We don't try to trigger the prompt here; we let the user do it 
+        // by clicking 'Open System Settings' or by the app actually trying to capture.
+        return (false, false)
     }
     
     private func checkAppSignature() -> (isValid: Bool, identifier: String?) {

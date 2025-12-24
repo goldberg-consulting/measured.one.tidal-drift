@@ -7,7 +7,7 @@ set -e
 
 APP_NAME="TidalDrift"
 BUNDLE_ID="com.goldbergconsulting.tidaldrift"
-VERSION="1.0.0"
+VERSION="1.1.2"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -89,6 +89,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
         <string>_afpovertcp._tcp</string>
         <string>_tidaldrift._tcp</string>
         <string>_tidalclip._tcp</string>
+        <string>_tidalstream._tcp</string>
     </array>
     <key>NSHumanReadableCopyright</key>
     <string>© 2024 Goldberg Consulting, LLC. All rights reserved.</string>

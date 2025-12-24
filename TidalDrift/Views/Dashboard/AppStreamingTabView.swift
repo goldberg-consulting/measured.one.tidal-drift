@@ -3,6 +3,8 @@ import SwiftUI
 struct AppStreamingTabView: View {
     @ObservedObject private var streamingService = AppStreamingService.shared
     @ObservedObject private var networkService = StreamingNetworkService.shared
+    @ObservedObject private var permissionService = PermissionDiagnosticService.shared
+    @State private var showingPermissionAlert = false
     
     var body: some View {
         ScrollView {
@@ -12,7 +14,13 @@ struct AppStreamingTabView: View {
                 statusSection
                 
                 if streamingService.isExperimentalEnabled {
-                    enabledContent
+                    if permissionService.screenRecordingGranted {
+                        enabledContent
+                    } else if permissionService.isRunningDiagnostic {
+                        loadingPermissionsContent
+                    } else {
+                        permissionRequiredContent
+                    }
                 } else {
                     disabledContent
                 }
@@ -22,12 +30,86 @@ struct AppStreamingTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
-            if streamingService.isExperimentalEnabled {
-                Task {
+            Task {
+                await checkPermissions()
+                if streamingService.isExperimentalEnabled && permissionService.screenRecordingGranted {
                     await streamingService.refreshAvailableApps()
                 }
             }
         }
+    }
+    
+    private func checkPermissions() async {
+        _ = await permissionService.runFullDiagnostic()
+    }
+    
+    private var loadingPermissionsContent: some View {
+        VStack(spacing: 20) {
+            ProgressView()
+                .scaleEffect(1.5)
+            Text("Checking system permissions...")
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 100)
+    }
+    
+    private var permissionRequiredContent: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "lock.shield")
+                .font(.system(size: 48))
+                .foregroundColor(.red)
+            
+            Text("Screen Recording Permission Required")
+                .font(.title2)
+                .fontWeight(.semibold)
+            
+            Text("To list and stream individual windows, TidalDrift needs Screen Recording permission. This is a system security requirement.")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 500)
+            
+            Button {
+                permissionService.openScreenRecordingSettings()
+            } label: {
+                Label("Open System Settings", systemImage: "arrow.up.forward.app")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Instructions:")
+                    .font(.headline)
+                
+                BulletPoint(text: "1. Click 'Open System Settings' above", done: false)
+                BulletPoint(text: "2. Find 'TidalDrift' in the list", done: false)
+                BulletPoint(text: "3. Toggle the switch to ON", done: false)
+                BulletPoint(text: "4. When prompted, click 'Quit & Reopen'", done: false)
+                
+                Divider()
+                    .padding(.vertical, 4)
+                
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle")
+                        .foregroundColor(.blue)
+                    Text("**Note for Developers:** If you rebuild the app, the signature changes and macOS may require you to toggle this OFF and ON again in System Settings to refresh the permission.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding()
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.red.opacity(0.05)))
+            
+            Button("I've granted permission, refresh status") {
+                Task {
+                    await checkPermissions()
+                }
+            }
+            .buttonStyle(.link)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 40)
     }
     
     private var headerSection: some View {
@@ -61,13 +143,22 @@ struct AppStreamingTabView: View {
     
     private var statusSection: some View {
         HStack(spacing: 16) {
-            Toggle("Enable Experimental Feature", isOn: Binding(
+            Toggle(isOn: Binding(
                 get: { streamingService.isExperimentalEnabled },
-                set: { streamingService.setExperimentalEnabled($0) }
-            ))
+                set: { 
+                    print("🔘 Toggle clicked: new value \($0)")
+                    streamingService.setExperimentalEnabled($0) 
+                }
+            )) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Experimental Feature")
+                        .font(.headline)
+                    Text("Enable to explore window-specific streaming capabilities")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
             .toggleStyle(.switch)
-            
-            Spacer()
             
             if streamingService.isExperimentalEnabled {
                 Button {
@@ -75,13 +166,21 @@ struct AppStreamingTabView: View {
                         await streamingService.refreshAvailableApps()
                     }
                 } label: {
-                    Label("Refresh Apps", systemImage: "arrow.clockwise")
+                    Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
+                .help("Refresh Apps")
             }
         }
         .padding()
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                )
+        )
     }
     
     private var disabledContent: some View {

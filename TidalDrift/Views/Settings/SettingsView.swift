@@ -151,6 +151,24 @@ struct GeneralSettingsView: View {
                     .foregroundColor(.secondary)
             }
             
+            Section("Experimental") {
+                Toggle(isOn: Binding(
+                    get: { AppStreamingService.shared.isExperimentalEnabled },
+                    set: { AppStreamingService.shared.setExperimentalEnabled($0) }
+                )) {
+                    HStack {
+                        Image(systemName: "sparkles")
+                            .foregroundColor(.orange)
+                        VStack(alignment: .leading) {
+                            Text("App Streaming")
+                            Text("Stream individual windows instead of full desktop")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            
             Section {
                 Picker("Appearance", selection: $appState.settings.theme) {
                     ForEach(AppSettings.AppTheme.allCases, id: \.self) { theme in
@@ -358,7 +376,7 @@ struct AboutView: View {
         VStack(spacing: 24) {
             TidalDriftLogo(size: .medium)
             
-            Text("Version 1.0.0")
+                    Text("Version 1.1.2")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             

@@ -61,9 +61,18 @@ struct DashboardView: View {
                 Label("Devices", systemImage: "desktopcomputer")
                     .tag(DashboardSection.devices)
                 
-                Label("App Streaming", systemImage: "app.connected.to.app.below.fill")
-                    .tag(DashboardSection.appStreaming)
-                    .badge(Text("β").foregroundColor(.orange))
+                HStack {
+                    Label("App Streaming", systemImage: "app.connected.to.app.below.fill")
+                    Spacer()
+                    Text("β")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange))
+                        .foregroundColor(.white)
+                }
+                .tag(DashboardSection.appStreaming)
                 
                 HStack {
                     Label("Clipboard Sync", systemImage: "doc.on.clipboard")

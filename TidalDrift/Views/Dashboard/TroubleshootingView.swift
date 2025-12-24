@@ -80,6 +80,15 @@ struct TroubleshootingView: View {
                 .tint(.orange)
                 .disabled(healthService.isResetting)
                 
+                Button {
+                    Task {
+                        _ = await healthService.resetScreenRecording()
+                    }
+                } label: {
+                    Label("Reset Screen Recording", systemImage: "video.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                
                 if let result = healthService.lastResetResult {
                     VStack(alignment: .leading) {
                         Text("Last reset: \(result.timestamp.formatted(date: .abbreviated, time: .shortened))")
