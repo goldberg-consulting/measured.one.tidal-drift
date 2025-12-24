@@ -71,6 +71,16 @@ struct StatusCardView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 
+                Button("Fix Sharing") {
+                    Task {
+                        _ = await SharingConfigurationService.shared.restartScreenSharing()
+                        await appState.checkSharingStatus()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Restart screen sharing service if connections are failing")
+                
                 Button("QR Code") {
                     showQRCode = true
                 }

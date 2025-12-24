@@ -200,6 +200,31 @@ class SharingConfigurationService: ObservableObject {
     
     // MARK: - Toggle Sharing Services
     
+    /// Ensure screen sharing is enabled - quick fix for connection issues
+    func ensureScreenSharingEnabled() async -> Bool {
+        // First check if it's already enabled
+        let isEnabled = await isScreenSharingEnabled()
+        if isEnabled {
+            return true
+        }
+        
+        // Try to enable it
+        return await toggleScreenSharing(enable: true)
+    }
+    
+    /// Quick fix: restart screen sharing service
+    func restartScreenSharing() async -> Bool {
+        // Disable then enable to restart the service
+        let script = """
+        do shell script "launchctl unload -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null; launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist" with administrator privileges
+        """
+        let result = await runAppleScript(script)
+        
+        // Refresh status after
+        await refreshStatus()
+        return result
+    }
+    
     func toggleScreenSharing(enable: Bool) async -> Bool {
         let script: String
         if enable {
@@ -212,7 +237,9 @@ class SharingConfigurationService: ObservableObject {
             """
         }
         
-        return await runAppleScript(script)
+        let result = await runAppleScript(script)
+        await refreshStatus()
+        return result
     }
     
     func toggleFileSharing(enable: Bool) async -> Bool {

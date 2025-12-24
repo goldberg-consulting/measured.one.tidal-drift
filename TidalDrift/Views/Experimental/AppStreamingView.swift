@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Experimental view for app-specific streaming
 struct AppStreamingView: View {
-    @StateObject private var service = AppStreamingService.shared
-    @StateObject private var networkService = StreamingNetworkService.shared
+    @ObservedObject private var service = AppStreamingService.shared
+    @ObservedObject private var networkService = StreamingNetworkService.shared
     @State private var showingInfo = false
     @State private var showingPermissionAlert = false
     @State private var showingResetAlert = false
@@ -11,6 +11,7 @@ struct AppStreamingView: View {
     @State private var selectedTab = 0  // 0 = Local, 1 = Remote
     
     var body: some View {
+        // Fixed size container
         VStack(spacing: 0) {
             header
             
@@ -22,8 +23,7 @@ struct AppStreamingView: View {
                 enabledContent
             }
         }
-        .frame(minWidth: 650, idealWidth: 700, maxWidth: 800, 
-               minHeight: 550, idealHeight: 600, maxHeight: 700)
+        .frame(width: 720, height: 580)
         .alert("Screen Recording Permission Required", isPresented: $showingPermissionAlert) {
             Button("Open System Settings") {
                 openScreenRecordingSettings()
@@ -173,18 +173,23 @@ struct AppStreamingView: View {
     
     private var localAppsContent: some View {
         VStack(spacing: 0) {
-            // Hosting status bar
+            // Hosting status bar - fixed at top
             hostingStatusBar
+                .frame(height: 44)
             
             Divider()
             
-            HSplitView {
+            // Split view with constrained sizes
+            HStack(spacing: 0) {
                 localAppList
-                    .frame(minWidth: 200)
+                    .frame(width: 280)
+                
+                Divider()
                 
                 localDetailView
-                    .frame(minWidth: 250)
+                    .frame(maxWidth: .infinity)
             }
+            .frame(maxHeight: .infinity)
         }
     }
     
@@ -215,15 +220,35 @@ struct AppStreamingView: View {
                 .controlSize(.small)
             } else {
                 Button {
-                    networkService.startHosting(apps: service.availableApps)
+                    // Log to file for debugging
+                    let logPath = "/tmp/tidaldrift_share.log"
+                    let msg = "[\(Date())] 🔘 BUTTON PRESSED - Apps: \(service.availableApps.count)\n"
+                    if let data = msg.data(using: .utf8) {
+                        if FileManager.default.fileExists(atPath: logPath) {
+                            if let handle = FileHandle(forWritingAtPath: logPath) {
+                                handle.seekToEndOfFile()
+                                handle.write(data)
+                                handle.closeFile()
+                            }
+                        } else {
+                            FileManager.default.createFile(atPath: logPath, contents: data)
+                        }
+                    }
+                    
+                    if service.availableApps.isEmpty {
+                        print("🔘 No apps available to share!")
+                    } else {
+                        networkService.startHosting(apps: service.availableApps)
+                    }
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "antenna.radiowaves.left.and.right")
-                        Text("Share My Apps")
+                        Text(service.availableApps.isEmpty ? "No Apps to Share" : "Share My Apps")
                     }
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .disabled(service.availableApps.isEmpty)
             }
             
             Spacer()
@@ -653,7 +678,7 @@ struct AppStreamingView: View {
 
 struct RemoteHostSection: View {
     let host: StreamingHost
-    @StateObject private var networkService = StreamingNetworkService.shared
+    @ObservedObject private var networkService = StreamingNetworkService.shared
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -697,7 +722,7 @@ struct RemoteHostSection: View {
 
 struct RemoteAppRow: View {
     let app: RemoteStreamableApp
-    @StateObject private var networkService = StreamingNetworkService.shared
+    @ObservedObject private var networkService = StreamingNetworkService.shared
     @State private var isHovered = false
     
     var body: some View {

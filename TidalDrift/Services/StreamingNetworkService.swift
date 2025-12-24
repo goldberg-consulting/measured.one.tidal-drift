@@ -65,33 +65,57 @@ class StreamingNetworkService: ObservableObject {
     
     private init() {}
     
+    // Debug logging to file
+    nonisolated private func log(_ message: String) {
+        let logMessage = "[\(Date())] \(message)\n"
+        print(logMessage)
+        
+        // Also write to file for debugging
+        let logPath = "/tmp/tidaldrift_share.log"
+        if let data = logMessage.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: logPath) {
+                if let handle = FileHandle(forWritingAtPath: logPath) {
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                    handle.closeFile()
+                }
+            } else {
+                FileManager.default.createFile(atPath: logPath, contents: data)
+            }
+        }
+    }
+    
     // MARK: - Hosting (Advertising your apps)
     
     /// Start advertising available apps on the network
     func startHosting(apps: [StreamableApp]) {
+        log("🎬 ========== START HOSTING CALLED ==========")
+        log("🎬 Current isHosting: \(isHosting)")
+        log("🎬 Apps count: \(apps.count)")
+        
         guard !isHosting else { 
-            #if DEBUG
-            print("🎬 Already hosting, skipping")
-            #endif
+            log("🎬 Already hosting, skipping")
             return 
         }
         
-        #if DEBUG
-        print("🎬 Starting hosting with \(apps.count) apps...")
-        #endif
+        log("🎬 Starting hosting with \(apps.count) apps...")
         
         // Convert to shareable format
         hostedApps = apps.compactMap { $0.bundleIdentifier }
+        log("🎬 Hosted apps bundle IDs: \(hostedApps.prefix(5))...")
         
         // Set hosting to true immediately for UI feedback
         isHosting = true
+        log("🎬 Set isHosting = true")
         
         do {
             // Create listener for incoming connections
             let parameters = NWParameters.tcp
             parameters.includePeerToPeer = true
             
+            log("🎬 Creating NWListener on port \(streamingPort)...")
             listener = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: streamingPort))
+            log("🎬 NWListener created successfully")
             
             // Set up TXT record with app info
             let txtData = createTXTRecord(for: apps)
@@ -102,22 +126,23 @@ class StreamingNetworkService: ObservableObject {
                 domain: serviceDomain,
                 txtRecord: txtData
             )
+            log("🎬 Service configured: \(serviceType) in \(serviceDomain)")
             
             listener?.stateUpdateHandler = { [weak self] state in
+                self?.log("🎬 Listener state changed: \(state)")
                 Task { @MainActor in
                     switch state {
                     case .ready:
                         self?.isHosting = true
-                        #if DEBUG
-                        print("🎬 Streaming host ready, advertising \(apps.count) apps")
-                        #endif
+                        self?.log("🎬 ✅ Streaming host ready, advertising \(apps.count) apps")
                     case .failed(let error):
-                        #if DEBUG
-                        print("🎬 Streaming host failed: \(error)")
-                        #endif
+                        self?.log("🎬 ❌ Streaming host failed: \(error)")
                         self?.isHosting = false
                     case .cancelled:
+                        self?.log("🎬 Streaming host cancelled")
                         self?.isHosting = false
+                    case .waiting(let error):
+                        self?.log("🎬 Streaming host waiting: \(error)")
                     default:
                         break
                     }
@@ -125,22 +150,21 @@ class StreamingNetworkService: ObservableObject {
             }
             
             listener?.newConnectionHandler = { [weak self] connection in
+                self?.log("🎬 New connection received!")
                 self?.handleIncomingConnection(connection)
             }
             
+            log("🎬 Starting listener...")
             listener?.start(queue: queue)
-            
-            #if DEBUG
-            print("🎬 Listener started on port \(streamingPort)")
-            #endif
+            log("🎬 Listener start() called")
             
         } catch {
-            #if DEBUG
-            print("🎬 Failed to start streaming host: \(error)")
-            #endif
+            log("🎬 ❌ Failed to start streaming host: \(error)")
             isHosting = false
             hostedApps = []
         }
+        
+        log("🎬 ========== END START HOSTING ==========")
     }
     
     /// Stop advertising

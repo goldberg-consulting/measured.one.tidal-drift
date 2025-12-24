@@ -100,3 +100,7 @@ iOSInjectionProject/
 .idea/
 *.swp
 *.swo
+
+# Ignore duplicate app bundles
+TidalDrift/TidalDrift\ *.app/
+
