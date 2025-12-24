@@ -20,18 +20,18 @@ let sizes: [(size: Int, scale: Int, name: String)] = [
 
 func drawWaveIcon(in context: CGContext, size: CGFloat) {
     let iconSize = size
-    let padding = iconSize * 0.1
+    let padding = iconSize * 0.08
     let drawSize = iconSize - (padding * 2)
     
     // Background circle with gradient
     let circleRect = CGRect(x: padding, y: padding, width: drawSize, height: drawSize)
     
-    // Ocean gradient
+    // Ocean gradient - deeper blue
     let colorSpace = CGColorSpaceCreateDeviceRGB()
     let colors = [
-        CGColor(red: 0.0, green: 0.3, blue: 0.7, alpha: 1.0),
-        CGColor(red: 0.0, green: 0.5, blue: 0.85, alpha: 1.0),
-        CGColor(red: 0.1, green: 0.6, blue: 0.95, alpha: 1.0)
+        CGColor(red: 0.0, green: 0.25, blue: 0.6, alpha: 1.0),
+        CGColor(red: 0.0, green: 0.45, blue: 0.8, alpha: 1.0),
+        CGColor(red: 0.05, green: 0.55, blue: 0.9, alpha: 1.0)
     ]
     let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: [0, 0.5, 1])!
     
@@ -44,43 +44,57 @@ func drawWaveIcon(in context: CGContext, size: CGFloat) {
                                 options: [])
     context.restoreGState()
     
-    // Draw wave with swirl
+    // Draw SPICY wave with dramatic curl! 🌊🌶️
     let wavePath = CGMutablePath()
     let centerX = iconSize / 2
     let centerY = iconSize / 2
-    let waveWidth = drawSize * 0.65
-    let waveHeight = drawSize * 0.25
+    let waveSize = drawSize * 0.75
     
-    // Start point
-    let startX = centerX - waveWidth / 2
-    let startY = centerY + waveHeight * 0.1
+    // Wave area bounds
+    let waveLeft = centerX - waveSize / 2
+    let waveTop = centerY - waveSize / 2
+    let waveWidth = waveSize
+    let waveHeight = waveSize
+    
+    // Start from bottom left - the base of the wave
+    let startX = waveLeft + waveWidth * 0.05
+    let startY = waveTop + waveHeight * 0.85
     
     wavePath.move(to: CGPoint(x: startX, y: startY))
     
-    // Wave body - S curve
-    let waveEndX = centerX + waveWidth * 0.15
+    // Rising wave face - sweeps up dramatically
     wavePath.addCurve(
-        to: CGPoint(x: waveEndX, y: centerY),
-        control1: CGPoint(x: centerX - waveWidth * 0.25, y: centerY - waveHeight * 0.8),
-        control2: CGPoint(x: centerX - waveWidth * 0.05, y: centerY + waveHeight * 0.8)
+        to: CGPoint(x: waveLeft + waveWidth * 0.5, y: waveTop + waveHeight * 0.15),
+        control1: CGPoint(x: waveLeft + waveWidth * 0.15, y: waveTop + waveHeight * 0.7),
+        control2: CGPoint(x: waveLeft + waveWidth * 0.35, y: waveTop + waveHeight * 0.1)
     )
     
-    // Swirl - curves up and back
-    let swirlTopX = centerX + waveWidth * 0.35
-    let swirlTopY = centerY - waveHeight * 0.6
+    // The crest - peaks and starts to curl over
     wavePath.addCurve(
-        to: CGPoint(x: swirlTopX, y: swirlTopY),
-        control1: CGPoint(x: waveEndX + waveWidth * 0.1, y: centerY - waveHeight * 0.2),
-        control2: CGPoint(x: swirlTopX, y: centerY - waveHeight * 0.1)
+        to: CGPoint(x: waveLeft + waveWidth * 0.75, y: waveTop + waveHeight * 0.25),
+        control1: CGPoint(x: waveLeft + waveWidth * 0.6, y: waveTop + waveHeight * 0.05),
+        control2: CGPoint(x: waveLeft + waveWidth * 0.7, y: waveTop + waveHeight * 0.08)
     )
     
-    // Curl inward
-    let swirlEndX = centerX + waveWidth * 0.22
-    let swirlEndY = centerY - waveHeight * 0.25
+    // THE CURL - dramatic spiral inward! 🌀
     wavePath.addCurve(
-        to: CGPoint(x: swirlEndX, y: swirlEndY),
-        control1: CGPoint(x: swirlTopX + waveWidth * 0.05, y: swirlTopY + waveHeight * 0.1),
-        control2: CGPoint(x: swirlEndX + waveWidth * 0.08, y: swirlEndY - waveHeight * 0.15)
+        to: CGPoint(x: waveLeft + waveWidth * 0.88, y: waveTop + waveHeight * 0.5),
+        control1: CGPoint(x: waveLeft + waveWidth * 0.82, y: waveTop + waveHeight * 0.28),
+        control2: CGPoint(x: waveLeft + waveWidth * 0.9, y: waveTop + waveHeight * 0.38)
+    )
+    
+    // Spiral tightens
+    wavePath.addCurve(
+        to: CGPoint(x: waveLeft + waveWidth * 0.72, y: waveTop + waveHeight * 0.55),
+        control1: CGPoint(x: waveLeft + waveWidth * 0.88, y: waveTop + waveHeight * 0.58),
+        control2: CGPoint(x: waveLeft + waveWidth * 0.8, y: waveTop + waveHeight * 0.6)
+    )
+    
+    // Inner spiral - tight curl center
+    wavePath.addCurve(
+        to: CGPoint(x: waveLeft + waveWidth * 0.68, y: waveTop + waveHeight * 0.42),
+        control1: CGPoint(x: waveLeft + waveWidth * 0.68, y: waveTop + waveHeight * 0.52),
+        control2: CGPoint(x: waveLeft + waveWidth * 0.65, y: waveTop + waveHeight * 0.48)
     )
     
     // Draw wave with white stroke and glow
@@ -88,10 +102,10 @@ func drawWaveIcon(in context: CGContext, size: CGFloat) {
     context.addEllipse(in: circleRect)
     context.clip()
     
-    // Glow effect
-    context.setShadow(offset: .zero, blur: drawSize * 0.05, color: CGColor(red: 1, green: 1, blue: 1, alpha: 0.5))
-    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.95))
-    context.setLineWidth(drawSize * 0.06)
+    // Strong glow effect
+    context.setShadow(offset: .zero, blur: drawSize * 0.08, color: CGColor(red: 1, green: 1, blue: 1, alpha: 0.6))
+    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1.0))
+    context.setLineWidth(drawSize * 0.08)  // Thicker line
     context.setLineCap(.round)
     context.setLineJoin(.round)
     context.addPath(wavePath)

@@ -99,26 +99,26 @@ struct TidalDriftLogo: View {
                 .frame(width: size.iconSize, height: size.iconSize)
                 .shadow(color: .blue.opacity(0.4), radius: size.iconSize / 5, x: 0, y: size.iconSize / 10)
             
-            // Single wave with swirl
+            // SPICY wave with dramatic curl! 🌊
             SwirlWaveShape(animationOffset: waveOffset)
                 .stroke(
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(0.9),
-                            Color.cyan.opacity(0.8),
-                            Color.white.opacity(0.7)
+                            Color.white,
+                            Color.white.opacity(0.95),
+                            Color.cyan.opacity(0.9)
                         ],
-                        startPoint: .leading,
-                        endPoint: .trailing
+                        startPoint: .bottomLeading,
+                        endPoint: .topTrailing
                     ),
                     style: StrokeStyle(
-                        lineWidth: size.iconSize / 20,
+                        lineWidth: size.iconSize / 12,
                         lineCap: .round,
                         lineJoin: .round
                     )
                 )
-                .frame(width: size.iconSize * 0.65, height: size.iconSize * 0.35)
-                .offset(y: size.iconSize * 0.05)
+                .frame(width: size.iconSize * 0.75, height: size.iconSize * 0.7)
+                .shadow(color: .white.opacity(0.5), radius: size.iconSize / 15, x: 0, y: 0)
         }
         .scaleEffect(isAnimating ? 1 : 0.9)
         .opacity(isAnimating ? 1 : 0.5)
@@ -153,7 +153,7 @@ struct WaveShape: Shape {
     }
 }
 
-// Single wave with swirl at the end - the main logo icon
+// SPICY wave with dramatic curl - like a cresting surf wave! 🌊🌶️
 struct SwirlWaveShape: Shape {
     var animationOffset: CGFloat
     
@@ -167,47 +167,50 @@ struct SwirlWaveShape: Shape {
         
         let width = rect.width
         let height = rect.height
-        let midY = rect.midY
         
-        // Start on the left
-        let startX: CGFloat = 0
-        let startY = midY + sin(animationOffset) * (height * 0.15)
+        // Animation pulse
+        let pulse = sin(animationOffset) * 0.08
+        
+        // Start from bottom left - the base of the wave
+        let startX: CGFloat = width * 0.05
+        let startY = height * 0.85 + pulse * height
         
         path.move(to: CGPoint(x: startX, y: startY))
         
-        // Wave body - gentle S-curve
-        let waveEndX = width * 0.65
-        let waveControlY1 = midY - height * 0.35 + sin(animationOffset + 0.5) * (height * 0.1)
-        let waveControlY2 = midY + height * 0.35 + sin(animationOffset + 1.0) * (height * 0.1)
-        
+        // Rising wave face - sweeps up dramatically
         path.addCurve(
-            to: CGPoint(x: waveEndX, y: midY + sin(animationOffset + 1.5) * (height * 0.1)),
-            control1: CGPoint(x: width * 0.25, y: waveControlY1),
-            control2: CGPoint(x: width * 0.45, y: waveControlY2)
+            to: CGPoint(x: width * 0.5, y: height * 0.15),
+            control1: CGPoint(x: width * 0.15, y: height * 0.7),
+            control2: CGPoint(x: width * 0.35, y: height * 0.1)
         )
         
-        // The swirl/curl at the end - curls upward and inward
-        let swirlStartX = waveEndX
-        let swirlStartY = midY + sin(animationOffset + 1.5) * (height * 0.1)
-        
-        // Swirl curves up and back on itself
-        let swirlMidX = width * 0.85
-        let swirlTopY = midY - height * 0.4 + sin(animationOffset + 2.0) * (height * 0.08)
-        let swirlEndX = width * 0.72
-        let swirlEndY = midY - height * 0.15 + sin(animationOffset + 2.5) * (height * 0.05)
-        
-        // First part of swirl - curves up
+        // The crest - peaks and starts to curl over
         path.addCurve(
-            to: CGPoint(x: swirlMidX, y: swirlTopY),
-            control1: CGPoint(x: swirlStartX + width * 0.1, y: swirlStartY - height * 0.1),
-            control2: CGPoint(x: swirlMidX, y: swirlStartY - height * 0.25)
+            to: CGPoint(x: width * 0.75, y: height * 0.25 + pulse * height),
+            control1: CGPoint(x: width * 0.6, y: height * 0.05 - pulse * height * 0.5),
+            control2: CGPoint(x: width * 0.7, y: height * 0.08)
         )
         
-        // Second part of swirl - curls inward (the spiral end)
+        // THE CURL - dramatic spiral inward! 🌀
+        // First part curves down and forward
         path.addCurve(
-            to: CGPoint(x: swirlEndX, y: swirlEndY),
-            control1: CGPoint(x: width * 0.88, y: swirlTopY + height * 0.05),
-            control2: CGPoint(x: width * 0.78, y: swirlEndY - height * 0.08)
+            to: CGPoint(x: width * 0.88, y: height * 0.5),
+            control1: CGPoint(x: width * 0.82, y: height * 0.28),
+            control2: CGPoint(x: width * 0.9, y: height * 0.38)
+        )
+        
+        // Spiral tightens - curling back under itself
+        path.addCurve(
+            to: CGPoint(x: width * 0.72, y: height * 0.55 + pulse * height),
+            control1: CGPoint(x: width * 0.88, y: height * 0.58),
+            control2: CGPoint(x: width * 0.8, y: height * 0.6)
+        )
+        
+        // Inner spiral - the tight curl center
+        path.addCurve(
+            to: CGPoint(x: width * 0.68, y: height * 0.42),
+            control1: CGPoint(x: width * 0.68, y: height * 0.52),
+            control2: CGPoint(x: width * 0.65, y: height * 0.48)
         )
         
         return path
