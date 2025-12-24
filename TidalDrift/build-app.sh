@@ -12,7 +12,15 @@ VERSION="1.0.0"
 # Colors for output
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
+
+# Kill any running instances of TidalDrift first
+if pgrep -f "TidalDrift" > /dev/null 2>&1; then
+    echo -e "${YELLOW}🔪 Killing running TidalDrift instances...${NC}"
+    pkill -f "TidalDrift" 2>/dev/null || true
+    sleep 1
+fi
 
 echo -e "${BLUE}🌊 Building TidalDrift...${NC}"
 
@@ -103,10 +111,18 @@ echo -e "${GREEN}✅ Build complete!${NC}"
 echo ""
 echo -e "App bundle created: ${BLUE}$(pwd)/$APP_BUNDLE${NC}"
 echo ""
-echo "To install:"
-echo "  1. Drag '$APP_BUNDLE' to your Applications folder"
-echo "  2. Or run: cp -R '$APP_BUNDLE' /Applications/"
-echo ""
-echo "To run now:"
-echo "  open '$APP_BUNDLE'"
+
+# Auto-launch if --run flag is passed
+if [[ "$1" == "--run" ]] || [[ "$1" == "-r" ]]; then
+    echo -e "${BLUE}🚀 Launching TidalDrift...${NC}"
+    open "$APP_BUNDLE"
+else
+    echo "To install:"
+    echo "  1. Drag '$APP_BUNDLE' to your Applications folder"
+    echo "  2. Or run: cp -R '$APP_BUNDLE' /Applications/"
+    echo ""
+    echo "To run now:"
+    echo "  open '$APP_BUNDLE'"
+    echo "  or: ./build-app.sh --run"
+fi
 
