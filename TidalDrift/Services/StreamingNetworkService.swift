@@ -232,8 +232,11 @@ class StreamingNetworkService: ObservableObject {
     }
     
     nonisolated private func handleRequest(_ data: Data, on connection: NWConnection) {
-        // Simple protocol: send back list of apps as JSON
-        if let request = String(data: data, encoding: .utf8), request == "LIST_APPS" {
+        guard let request = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        
+        switch request {
+        case "LIST_APPS":
+            // Return list of available apps
             Task { @MainActor in
                 let apps = AppStreamingService.shared.availableApps
                 let response = apps.map { app in
@@ -245,6 +248,35 @@ class StreamingNetworkService: ObservableObject {
                     connection.send(content: jsonData, completion: .contentProcessed { _ in })
                 }
             }
+            
+        case "RESTART_SCREEN_SHARING":
+            // Remote request to restart local Screen Sharing service
+            // This fixes the "not permitted" macOS bug
+            Task {
+                #if DEBUG
+                print("🔧 Remote request to restart Screen Sharing")
+                #endif
+                
+                let success = await ScreenShareConnectionService.shared.restartLocalScreenSharing()
+                
+                let response = success ? "OK" : "FAILED"
+                let responseData = Data(response.utf8)
+                connection.send(content: responseData, completion: .contentProcessed { _ in })
+                
+                #if DEBUG
+                print("🔧 Screen Sharing restart: \(success ? "success" : "failed")")
+                #endif
+            }
+            
+        case "PING":
+            // Simple health check
+            let response = Data("PONG".utf8)
+            connection.send(content: response, completion: .contentProcessed { _ in })
+            
+        default:
+            #if DEBUG
+            print("🔍 Unknown request: \(request)")
+            #endif
         }
     }
     

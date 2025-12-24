@@ -51,13 +51,36 @@ struct DeviceDetailSheet: View {
             
             footer
         }
-        .frame(width: 450, height: 550)
+        .frame(width: 450, height: 580)
         .alert("Connection Error", isPresented: .constant(viewModel.connectionError != nil)) {
             Button("OK") {
                 viewModel.connectionError = nil
             }
+            
+            // Add "Fix Remote" button if it's the "not permitted" error and device is a TidalDrift peer
+            if let error = viewModel.connectionError,
+               error.contains("not permitted") && device.isTidalDriftPeer {
+                Button("Fix Remote Screen Sharing") {
+                    Task {
+                        _ = await ScreenShareConnectionService.shared.requestRemoteScreenSharingRestart(ipAddress: device.ipAddress)
+                    }
+                    viewModel.connectionError = nil
+                }
+            }
         } message: {
-            Text(viewModel.connectionError ?? "")
+            if let error = viewModel.connectionError {
+                if error.contains("not permitted") {
+                    Text("""
+                    \(error)
+                    
+                    This is a known macOS bug. The remote machine needs to restart its Screen Sharing service.
+                    
+                    \(device.isTidalDriftPeer ? "Click 'Fix Remote Screen Sharing' to fix automatically." : "On the remote Mac: System Settings → Sharing → Toggle Screen Sharing OFF then ON.")
+                    """)
+                } else {
+                    Text(error)
+                }
+            }
         }
     }
     
@@ -110,6 +133,9 @@ struct DeviceDetailSheet: View {
         .padding(20)
     }
     
+    @State private var isFixingRemoteScreenSharing = false
+    @State private var fixRemoteResult: Bool?
+    
     private var connectionSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Quick Connect")
@@ -151,6 +177,39 @@ struct DeviceDetailSheet: View {
                 
                 Spacer()
                 
+                // Fix Remote Screen Sharing button (for "not permitted" error)
+                if device.isTidalDriftPeer && device.services.contains(.screenSharing) {
+                    Button {
+                        Task {
+                            isFixingRemoteScreenSharing = true
+                            fixRemoteResult = nil
+                            let success = await ScreenShareConnectionService.shared.requestRemoteScreenSharingRestart(ipAddress: device.ipAddress)
+                            fixRemoteResult = success
+                            isFixingRemoteScreenSharing = false
+                            
+                            // Auto-clear result after 3 seconds
+                            try? await Task.sleep(nanoseconds: 3_000_000_000)
+                            fixRemoteResult = nil
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if isFixingRemoteScreenSharing {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                            } else if let result = fixRemoteResult {
+                                Image(systemName: result ? "checkmark.circle" : "xmark.circle")
+                                    .foregroundColor(result ? .green : .red)
+                            } else {
+                                Image(systemName: "wrench.fill")
+                            }
+                            Text("Fix Remote")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Restart Screen Sharing on remote machine (fixes 'not permitted' error)")
+                }
+                
                 Button {
                     Task {
                         await viewModel.testConnection()
@@ -169,6 +228,13 @@ struct DeviceDetailSheet: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+            
+            // Show fix instructions if not a TidalDrift peer
+            if !device.isTidalDriftPeer {
+                Text("💡 If you see 'not permitted' error, toggle Screen Sharing off/on on the remote Mac")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
         }
         .padding(16)
