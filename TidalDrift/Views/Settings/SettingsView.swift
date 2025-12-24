@@ -85,6 +85,36 @@ struct NetworkSettingsView: View {
                 Toggle("Auto-connect to trusted devices", isOn: $appState.settings.autoConnectTrustedDevices)
             }
             
+            Section {
+                Toggle("Enable Wake-on-LAN", isOn: $appState.settings.wakeOnLANEnabled)
+                
+                if appState.settings.wakeOnLANEnabled {
+                    Toggle("Auto-wake before connecting", isOn: $appState.settings.autoWakeBeforeConnect)
+                        .help("Automatically send a wake signal before connecting to an offline device")
+                    
+                    Picker("WOL Port", selection: $appState.settings.wakeOnLANPort) {
+                        ForEach(AppSettings.wolPortOptions, id: \.self) { port in
+                            Text(AppSettings.wolPortDisplayName(for: port)).tag(port)
+                        }
+                    }
+                    
+                    Picker("Retry attempts", selection: $appState.settings.wakeOnLANRetries) {
+                        ForEach(AppSettings.wolRetryOptions, id: \.self) { count in
+                            Text("\(count) \(count == 1 ? "attempt" : "attempts")").tag(count)
+                        }
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Wake-on-LAN")
+                    Image(systemName: "poweron")
+                        .foregroundColor(.green)
+                }
+            } footer: {
+                Text("Wake sleeping Macs on your network. Requires the target Mac to have Wake for network access enabled in Energy Saver settings.")
+                    .font(.caption)
+            }
+            
             Section("Network Status") {
                 HStack {
                     Text("Local IP")
@@ -217,42 +247,11 @@ struct StatusBadge: View {
 struct AboutView: View {
     var body: some View {
         VStack(spacing: 24) {
-            VStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.0, green: 0.5, blue: 0.9),
-                                    Color(red: 0.0, green: 0.3, blue: 0.7)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 80, height: 80)
-                        .shadow(color: .blue.opacity(0.3), radius: 10, x: 0, y: 5)
-                    
-                    Image(systemName: "display.2")
-                        .font(.system(size: 35, weight: .medium))
-                        .foregroundColor(.white)
-                }
-                
-                Text("TidalDrift")
-                    .font(.title)
-                    .fontWeight(.bold)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.blue, .cyan],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                
-                Text("Version 1.0.0")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
+            TidalDriftLogo(size: .medium)
+            
+            Text("Version 1.0.0")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
             
             VStack(spacing: 8) {
                 Text("VPN & VNET Screen Sharing Made Simple")

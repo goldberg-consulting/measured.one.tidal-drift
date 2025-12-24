@@ -98,6 +98,17 @@ struct MenuBarView: View {
             }
             .buttonStyle(.plain)
             
+            Button {
+                appState.hasCompletedOnboarding = false
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.counterclockwise")
+                    Text("Run Setup Wizard")
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
+            
             Divider()
                 .padding(.vertical, 4)
             

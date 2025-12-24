@@ -10,6 +10,12 @@ struct AppSettings: Codable, Equatable {
     var autoConnectTrustedDevices: Bool
     var theme: AppTheme
     
+    // Wake-on-LAN settings
+    var wakeOnLANEnabled: Bool
+    var wakeOnLANPort: Int
+    var wakeOnLANRetries: Int
+    var autoWakeBeforeConnect: Bool
+    
     init(launchAtLogin: Bool = false,
          scanIntervalSeconds: Int = 30,
          showNotifications: Bool = true,
@@ -17,7 +23,11 @@ struct AppSettings: Codable, Equatable {
          enableConnectionLogging: Bool = true,
          showMenuBarIcon: Bool = true,
          autoConnectTrustedDevices: Bool = false,
-         theme: AppTheme = .system) {
+         theme: AppTheme = .system,
+         wakeOnLANEnabled: Bool = true,
+         wakeOnLANPort: Int = 9,
+         wakeOnLANRetries: Int = 3,
+         autoWakeBeforeConnect: Bool = true) {
         self.launchAtLogin = launchAtLogin
         self.scanIntervalSeconds = scanIntervalSeconds
         self.showNotifications = showNotifications
@@ -26,6 +36,10 @@ struct AppSettings: Codable, Equatable {
         self.showMenuBarIcon = showMenuBarIcon
         self.autoConnectTrustedDevices = autoConnectTrustedDevices
         self.theme = theme
+        self.wakeOnLANEnabled = wakeOnLANEnabled
+        self.wakeOnLANPort = wakeOnLANPort
+        self.wakeOnLANRetries = wakeOnLANRetries
+        self.autoWakeBeforeConnect = autoWakeBeforeConnect
     }
     
     enum AppTheme: String, Codable, CaseIterable {
@@ -64,4 +78,17 @@ extension AppSettings {
         default: return "\(seconds) seconds"
         }
     }
+    
+    // Wake-on-LAN options
+    static let wolPortOptions: [Int] = [7, 9]
+    
+    static func wolPortDisplayName(for port: Int) -> String {
+        switch port {
+        case 7: return "Port 7 (Echo)"
+        case 9: return "Port 9 (Discard) - Default"
+        default: return "Port \(port)"
+        }
+    }
+    
+    static let wolRetryOptions: [Int] = [1, 3, 5, 10]
 }

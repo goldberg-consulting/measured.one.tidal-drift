@@ -4,6 +4,8 @@ struct DashboardView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = DashboardViewModel()
     @ObservedObject private var discoveryService = NetworkDiscoveryService.shared
+    @State private var showAppStreaming = false
+    @State private var showClipboardSync = false
     
     var body: some View {
         NavigationSplitView {
@@ -17,6 +19,12 @@ struct DashboardView: View {
         }
         .sheet(item: $viewModel.selectedDevice) { device in
             DeviceDetailSheet(device: device)
+        }
+        .sheet(isPresented: $showAppStreaming) {
+            AppStreamingView()
+        }
+        .sheet(isPresented: $showClipboardSync) {
+            ClipboardSyncView()
         }
         .onAppear {
             NetworkDiscoveryService.shared.startBrowsing()
@@ -49,6 +57,40 @@ struct DashboardView: View {
                     Label("iCloud Devices", systemImage: "icloud")
                 }
                 .help("Open Finder to see Macs on your iCloud account")
+            }
+            
+            Section("Experimental") {
+                Button {
+                    showAppStreaming = true
+                } label: {
+                    HStack {
+                        Label("App Streaming", systemImage: "app.connected.to.app.below.fill")
+                        Spacer()
+                        Image(systemName: "sparkles")
+                            .foregroundColor(.orange)
+                            .font(.caption)
+                    }
+                }
+                .help("Stream a single app instead of the full desktop")
+                
+                Button {
+                    showClipboardSync = true
+                } label: {
+                    HStack {
+                        Label("Clipboard Sync", systemImage: "doc.on.clipboard")
+                        Spacer()
+                        if ClipboardSyncService.shared.isEnabled {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 8, height: 8)
+                        } else {
+                            Image(systemName: "sparkles")
+                                .foregroundColor(.orange)
+                                .font(.caption)
+                        }
+                    }
+                }
+                .help("Share clipboard between Macs on your network")
             }
             
             if !appState.connectionHistory.isEmpty {

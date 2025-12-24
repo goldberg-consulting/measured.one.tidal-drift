@@ -1,0 +1,280 @@
+import Foundation
+import AppKit
+import ScreenCaptureKit
+import Combine
+
+/// Represents a running application that can be streamed
+struct StreamableApp: Identifiable, Hashable {
+    let id: pid_t
+    let name: String
+    let bundleIdentifier: String?
+    let icon: NSImage?
+    let windows: [StreamableWindow]
+    
+    static func == (lhs: StreamableApp, rhs: StreamableApp) -> Bool {
+        lhs.id == rhs.id
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+/// Represents a window that can be streamed
+struct StreamableWindow: Identifiable, Hashable {
+    let id: CGWindowID
+    let title: String
+    let bounds: CGRect
+    let isOnScreen: Bool
+    
+    static func == (lhs: StreamableWindow, rhs: StreamableWindow) -> Bool {
+        lhs.id == rhs.id
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+/// Service for app-specific streaming functionality
+/// This is an EXPERIMENTAL feature that allows streaming individual apps instead of the full desktop
+@MainActor
+class AppStreamingService: ObservableObject {
+    static let shared = AppStreamingService()
+    
+    @Published var availableApps: [StreamableApp] = []
+    @Published var isLoading = false
+    @Published var selectedApp: StreamableApp?
+    @Published var selectedWindow: StreamableWindow?
+    @Published var errorMessage: String?
+    @Published var isExperimentalEnabled = false
+    
+    private var streamConfiguration: SCStreamConfiguration?
+    private var stream: SCStream?
+    private var contentFilter: SCContentFilter?
+    
+    private init() {
+        // Check if experimental features are enabled
+        isExperimentalEnabled = UserDefaults.standard.bool(forKey: "experimentalAppStreaming")
+    }
+    
+    /// Refreshes the list of available apps that can be streamed
+    func refreshAvailableApps() async {
+        isLoading = true
+        errorMessage = nil
+        
+        do {
+            // Get shareable content using ScreenCaptureKit
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            
+            // Group windows by application
+            var appDict: [pid_t: (app: SCRunningApplication, windows: [SCWindow])] = [:]
+            
+            for window in content.windows {
+                guard let app = window.owningApplication else { continue }
+                
+                // Skip system windows and TidalDrift itself
+                let bundleId = app.bundleIdentifier
+                if bundleId == Bundle.main.bundleIdentifier { continue }
+                if bundleId.hasPrefix("com.apple.") {
+                    // Allow some Apple apps like Safari, but skip system UI
+                    let allowedAppleApps = ["com.apple.Safari", "com.apple.finder", "com.apple.Preview", 
+                                           "com.apple.Notes", "com.apple.mail", "com.apple.TextEdit"]
+                    if !allowedAppleApps.contains(bundleId) {
+                        continue
+                    }
+                }
+                
+                if appDict[app.processID] == nil {
+                    appDict[app.processID] = (app: app, windows: [])
+                }
+                appDict[app.processID]?.windows.append(window)
+            }
+            
+            // Convert to StreamableApp objects
+            var apps: [StreamableApp] = []
+            for (pid, data) in appDict {
+                let icon = getAppIcon(for: data.app.bundleIdentifier)
+                let windows = data.windows.map { window in
+                    StreamableWindow(
+                        id: window.windowID,
+                        title: window.title ?? "Untitled Window",
+                        bounds: window.frame,
+                        isOnScreen: window.isOnScreen
+                    )
+                }
+                
+                apps.append(StreamableApp(
+                    id: pid,
+                    name: data.app.applicationName,
+                    bundleIdentifier: data.app.bundleIdentifier,
+                    icon: icon,
+                    windows: windows
+                ))
+            }
+            
+            // Sort by name
+            availableApps = apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            
+        } catch {
+            errorMessage = "Failed to get available apps: \(error.localizedDescription)"
+            #if DEBUG
+            print("AppStreamingService error: \(error)")
+            #endif
+        }
+        
+        isLoading = false
+    }
+    
+    /// Gets the app icon for a bundle identifier
+    private func getAppIcon(for bundleId: String?) -> NSImage? {
+        guard let bundleId = bundleId,
+              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
+            return NSImage(systemSymbolName: "app.dashed", accessibilityDescription: nil)
+        }
+        return NSWorkspace.shared.icon(forFile: url.path)
+    }
+    
+    /// Selects an app for streaming
+    func selectApp(_ app: StreamableApp) {
+        selectedApp = app
+        selectedWindow = app.windows.first
+    }
+    
+    /// Selects a specific window for streaming
+    func selectWindow(_ window: StreamableWindow) {
+        selectedWindow = window
+    }
+    
+    /// Generates a VNC URL for app-specific streaming (experimental)
+    /// Note: Standard VNC doesn't support app-specific streaming, this would require
+    /// a custom server implementation or using Apple's Remote Desktop protocol extensions
+    func getStreamingInfo() -> (url: String, note: String)? {
+        guard let app = selectedApp else { return nil }
+        
+        // Get local IP
+        guard let localIP = getLocalIPAddress() else {
+            return nil
+        }
+        
+        // This is a conceptual URL - real implementation would need custom protocol
+        let note = """
+        App-Specific Streaming is experimental.
+        
+        Standard VNC streams the entire desktop. To stream just "\(app.name)":
+        
+        Option 1: Use the built-in Screen Sharing with "Window" mode
+        Option 2: Share via FaceTime/iMessage for single apps
+        Option 3: Use a custom streaming solution
+        
+        For now, connecting will open standard screen sharing.
+        """
+        
+        return (url: "vnc://\(localIP)", note: note)
+    }
+    
+    /// Opens the selected app for the remote user to see
+    func bringAppToFront() {
+        guard let app = selectedApp,
+              let runningApp = NSRunningApplication(processIdentifier: app.id) else {
+            return
+        }
+        runningApp.activate(options: [.activateIgnoringOtherApps])
+    }
+    
+    /// Attempts to start app-specific streaming using ScreenCaptureKit
+    /// This creates a stream that could be broadcast via custom protocol
+    func startCapture() async throws {
+        guard let app = selectedApp else {
+            throw StreamingError.noAppSelected
+        }
+        
+        // Get content again to ensure fresh data
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        
+        // Find the app in shareable content
+        guard content.applications.contains(where: { $0.processID == app.id }) else {
+            throw StreamingError.appNotFound
+        }
+        
+        // Create filter for just this app
+        contentFilter = SCContentFilter(desktopIndependentWindow: content.windows.first { 
+            $0.owningApplication?.processID == app.id 
+        }!)
+        
+        // Configure stream
+        let config = SCStreamConfiguration()
+        config.width = 1920
+        config.height = 1080
+        config.minimumFrameInterval = CMTime(value: 1, timescale: 30) // 30 fps
+        config.queueDepth = 5
+        config.showsCursor = true
+        
+        streamConfiguration = config
+        
+        // Note: Actually starting the stream and broadcasting would require
+        // implementing a custom streaming protocol or using WebRTC
+        #if DEBUG
+        print("Would start streaming app: \(app.name)")
+        #endif
+    }
+    
+    /// Stops the current capture
+    func stopCapture() async {
+        try? await stream?.stopCapture()
+        stream = nil
+        contentFilter = nil
+    }
+    
+    /// Toggles experimental feature
+    func setExperimentalEnabled(_ enabled: Bool) {
+        isExperimentalEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "experimentalAppStreaming")
+    }
+    
+    private func getLocalIPAddress() -> String? {
+        var address: String?
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        
+        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+        
+        for ptr in sequence(first: firstAddr, next: { $0.pointee.ifa_next }) {
+            let interface = ptr.pointee
+            let addrFamily = interface.ifa_addr.pointee.sa_family
+            
+            if addrFamily == UInt8(AF_INET) {
+                let name = String(cString: interface.ifa_name)
+                if name == "en0" || name == "en1" {
+                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
+                              &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+                    address = String(cString: hostname)
+                    break
+                }
+            }
+        }
+        return address
+    }
+}
+
+enum StreamingError: LocalizedError {
+    case noAppSelected
+    case appNotFound
+    case captureNotSupported
+    case permissionDenied
+    
+    var errorDescription: String? {
+        switch self {
+        case .noAppSelected:
+            return "No app selected for streaming"
+        case .appNotFound:
+            return "Selected app is no longer running"
+        case .captureNotSupported:
+            return "Screen capture is not supported on this system"
+        case .permissionDenied:
+            return "Screen recording permission is required"
+        }
+    }
+}
+

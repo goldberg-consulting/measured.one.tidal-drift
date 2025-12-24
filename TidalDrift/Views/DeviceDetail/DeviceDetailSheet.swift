@@ -5,6 +5,18 @@ struct DeviceDetailSheet: View {
     @StateObject private var viewModel: DeviceDetailViewModel
     @Environment(\.dismiss) var dismiss
     
+    // Wake-on-LAN state
+    @State private var macAddress: String = ""
+    @State private var isWaking = false
+    @State private var wakeResult: WakeResult?
+    @State private var isDiscoveringMAC = false
+    
+    enum WakeResult {
+        case success
+        case failed
+        case waiting
+    }
+    
     init(device: DiscoveredDevice) {
         self.device = device
         _viewModel = StateObject(wrappedValue: DeviceDetailViewModel(device: device))
@@ -19,6 +31,8 @@ struct DeviceDetailSheet: View {
             ScrollView {
                 VStack(spacing: 24) {
                     connectionSection
+                    
+                    wakeOnLANSection
                     
                     servicesSection
                     
@@ -162,6 +176,153 @@ struct DeviceDetailSheet: View {
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color(nsColor: .controlBackgroundColor))
         )
+    }
+    
+    private var wakeOnLANSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "wake")
+                    .foregroundColor(.orange)
+                Text("Wake-on-LAN")
+                    .font(.headline)
+                
+                Spacer()
+                
+                if !device.isOnline {
+                    Text("Device Offline")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+            
+            HStack(spacing: 8) {
+                TextField("MAC Address (AA:BB:CC:DD:EE:FF)", text: $macAddress)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .onAppear {
+                        // Load stored MAC address
+                        if let stored = device.storedMACAddress {
+                            macAddress = stored
+                        }
+                    }
+                
+                Button {
+                    discoverMAC()
+                } label: {
+                    if isDiscoveringMAC {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                    } else {
+                        Image(systemName: "magnifyingglass")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .help("Auto-discover MAC address")
+                .disabled(isDiscoveringMAC || !device.isOnline)
+            }
+            
+            HStack {
+                Button {
+                    wakeDevice()
+                } label: {
+                    HStack(spacing: 6) {
+                        if isWaking {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                        } else {
+                            Image(systemName: "power")
+                        }
+                        Text(isWaking ? "Waking..." : "Wake Device")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .disabled(!WakeOnLANService.shared.isValidMACAddress(macAddress) || isWaking)
+                
+                if let result = wakeResult {
+                    HStack(spacing: 4) {
+                        switch result {
+                        case .success:
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Awake!")
+                        case .failed:
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                            Text("Failed")
+                        case .waiting:
+                            ProgressView()
+                                .scaleEffect(0.5)
+                            Text("Waiting...")
+                        }
+                    }
+                    .font(.caption)
+                }
+            }
+            
+            Text("Wake-on-LAN sends a magic packet to power on sleeping Macs. The device must have WOL enabled in Energy Saver settings.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.orange.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+                )
+        )
+    }
+    
+    private func discoverMAC() {
+        isDiscoveringMAC = true
+        
+        Task {
+            // Try to get MAC from ARP table
+            if let mac = WakeOnLANService.shared.getMACAddress(for: device.ipAddress) {
+                await MainActor.run {
+                    macAddress = mac
+                    // Store it for future use
+                    var mutableDevice = device
+                    mutableDevice.storedMACAddress = mac
+                }
+            }
+            
+            await MainActor.run {
+                isDiscoveringMAC = false
+            }
+        }
+    }
+    
+    private func wakeDevice() {
+        guard WakeOnLANService.shared.isValidMACAddress(macAddress) else { return }
+        
+        // Store MAC for future use
+        var mutableDevice = device
+        mutableDevice.storedMACAddress = macAddress
+        
+        isWaking = true
+        wakeResult = .waiting
+        
+        Task {
+            let success = await WakeOnLANService.shared.wakeAndWait(
+                macAddress: macAddress,
+                ipAddress: device.ipAddress,
+                timeout: 30
+            )
+            
+            await MainActor.run {
+                isWaking = false
+                wakeResult = success ? .success : .failed
+                
+                // Clear result after delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    wakeResult = nil
+                }
+            }
+        }
     }
     
     private var servicesSection: some View {
