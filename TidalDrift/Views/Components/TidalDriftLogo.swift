@@ -88,9 +88,8 @@ struct TidalDriftLogo: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(red: 0.0, green: 0.3, blue: 0.6),
-                            Color(red: 0.0, green: 0.5, blue: 0.8),
-                            Color(red: 0.1, green: 0.6, blue: 0.9)
+                            Color(red: 0.0, green: 0.3, blue: 0.65),
+                            Color(red: 0.0, green: 0.5, blue: 0.85)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -99,26 +98,12 @@ struct TidalDriftLogo: View {
                 .frame(width: size.iconSize, height: size.iconSize)
                 .shadow(color: .blue.opacity(0.4), radius: size.iconSize / 5, x: 0, y: size.iconSize / 10)
             
-            // SPICY wave with dramatic curl! 🌊
-            SwirlWaveShape(animationOffset: waveOffset)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.white,
-                            Color.white.opacity(0.95),
-                            Color.cyan.opacity(0.9)
-                        ],
-                        startPoint: .bottomLeading,
-                        endPoint: .topTrailing
-                    ),
-                    style: StrokeStyle(
-                        lineWidth: size.iconSize / 12,
-                        lineCap: .round,
-                        lineJoin: .round
-                    )
-                )
-                .frame(width: size.iconSize * 0.75, height: size.iconSize * 0.7)
-                .shadow(color: .white.opacity(0.5), radius: size.iconSize / 15, x: 0, y: 0)
+            // Simple animated wave ≈
+            Text("≈")
+                .font(.system(size: size.iconSize * 0.55, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
+                .offset(y: sin(waveOffset) * (size.iconSize * 0.03))
+                .scaleEffect(x: 1.0 + sin(waveOffset * 0.5) * 0.05, y: 1.0)
         }
         .scaleEffect(isAnimating ? 1 : 0.9)
         .opacity(isAnimating ? 1 : 0.5)

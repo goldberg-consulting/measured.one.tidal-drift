@@ -26,14 +26,13 @@ func drawWaveIcon(in context: CGContext, size: CGFloat) {
     // Background circle with gradient
     let circleRect = CGRect(x: padding, y: padding, width: drawSize, height: drawSize)
     
-    // Ocean gradient - deeper blue
+    // Ocean gradient
     let colorSpace = CGColorSpaceCreateDeviceRGB()
     let colors = [
-        CGColor(red: 0.0, green: 0.25, blue: 0.6, alpha: 1.0),
-        CGColor(red: 0.0, green: 0.45, blue: 0.8, alpha: 1.0),
-        CGColor(red: 0.05, green: 0.55, blue: 0.9, alpha: 1.0)
+        CGColor(red: 0.0, green: 0.3, blue: 0.65, alpha: 1.0),
+        CGColor(red: 0.0, green: 0.5, blue: 0.85, alpha: 1.0)
     ]
-    let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: [0, 0.5, 1])!
+    let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: [0, 1])!
     
     context.saveGState()
     context.addEllipse(in: circleRect)
@@ -44,72 +43,33 @@ func drawWaveIcon(in context: CGContext, size: CGFloat) {
                                 options: [])
     context.restoreGState()
     
-    // Draw SPICY wave with dramatic curl! 🌊🌶️
-    let wavePath = CGMutablePath()
+    // Draw simple ≈ wave symbol
     let centerX = iconSize / 2
     let centerY = iconSize / 2
-    let waveSize = drawSize * 0.75
+    let fontSize = drawSize * 0.55
     
-    // Wave area bounds
-    let waveLeft = centerX - waveSize / 2
-    let waveTop = centerY - waveSize / 2
-    let waveWidth = waveSize
-    let waveHeight = waveSize
+    // Create attributed string with ≈
+    let font = NSFont.systemFont(ofSize: fontSize, weight: .bold)
+    let attributes: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: NSColor.white
+    ]
+    let string = "≈" as NSString
+    let stringSize = string.size(withAttributes: attributes)
     
-    // Start from bottom left - the base of the wave
-    let startX = waveLeft + waveWidth * 0.05
-    let startY = waveTop + waveHeight * 0.85
+    // Draw centered
+    let x = centerX - stringSize.width / 2
+    let y = centerY - stringSize.height / 2
     
-    wavePath.move(to: CGPoint(x: startX, y: startY))
-    
-    // Rising wave face - sweeps up dramatically
-    wavePath.addCurve(
-        to: CGPoint(x: waveLeft + waveWidth * 0.5, y: waveTop + waveHeight * 0.15),
-        control1: CGPoint(x: waveLeft + waveWidth * 0.15, y: waveTop + waveHeight * 0.7),
-        control2: CGPoint(x: waveLeft + waveWidth * 0.35, y: waveTop + waveHeight * 0.1)
-    )
-    
-    // The crest - peaks and starts to curl over
-    wavePath.addCurve(
-        to: CGPoint(x: waveLeft + waveWidth * 0.75, y: waveTop + waveHeight * 0.25),
-        control1: CGPoint(x: waveLeft + waveWidth * 0.6, y: waveTop + waveHeight * 0.05),
-        control2: CGPoint(x: waveLeft + waveWidth * 0.7, y: waveTop + waveHeight * 0.08)
-    )
-    
-    // THE CURL - dramatic spiral inward! 🌀
-    wavePath.addCurve(
-        to: CGPoint(x: waveLeft + waveWidth * 0.88, y: waveTop + waveHeight * 0.5),
-        control1: CGPoint(x: waveLeft + waveWidth * 0.82, y: waveTop + waveHeight * 0.28),
-        control2: CGPoint(x: waveLeft + waveWidth * 0.9, y: waveTop + waveHeight * 0.38)
-    )
-    
-    // Spiral tightens
-    wavePath.addCurve(
-        to: CGPoint(x: waveLeft + waveWidth * 0.72, y: waveTop + waveHeight * 0.55),
-        control1: CGPoint(x: waveLeft + waveWidth * 0.88, y: waveTop + waveHeight * 0.58),
-        control2: CGPoint(x: waveLeft + waveWidth * 0.8, y: waveTop + waveHeight * 0.6)
-    )
-    
-    // Inner spiral - tight curl center
-    wavePath.addCurve(
-        to: CGPoint(x: waveLeft + waveWidth * 0.68, y: waveTop + waveHeight * 0.42),
-        control1: CGPoint(x: waveLeft + waveWidth * 0.68, y: waveTop + waveHeight * 0.52),
-        control2: CGPoint(x: waveLeft + waveWidth * 0.65, y: waveTop + waveHeight * 0.48)
-    )
-    
-    // Draw wave with white stroke and glow
     context.saveGState()
     context.addEllipse(in: circleRect)
     context.clip()
     
-    // Strong glow effect
-    context.setShadow(offset: .zero, blur: drawSize * 0.08, color: CGColor(red: 1, green: 1, blue: 1, alpha: 0.6))
-    context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1.0))
-    context.setLineWidth(drawSize * 0.08)  // Thicker line
-    context.setLineCap(.round)
-    context.setLineJoin(.round)
-    context.addPath(wavePath)
-    context.strokePath()
+    // Flip for text drawing
+    context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+    
+    let textRect = CGRect(x: x, y: y + stringSize.height, width: stringSize.width, height: stringSize.height)
+    string.draw(in: textRect, withAttributes: attributes)
     
     context.restoreGState()
 }
