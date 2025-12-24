@@ -99,44 +99,34 @@ struct TidalDriftLogo: View {
                 .frame(width: size.iconSize, height: size.iconSize)
                 .shadow(color: .blue.opacity(0.4), radius: size.iconSize / 5, x: 0, y: size.iconSize / 10)
             
-            // Animated waves inside circle
-            ZStack {
-                // Wave 1 - computers floating
-                ForEach(0..<5, id: \.self) { i in
-                    computerIcon(index: i)
-                }
-                
-                // Wave overlay
-                WaveShape(offset: waveOffset, amplitude: size.iconSize / 20)
-                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                    .frame(width: size.iconSize * 0.7, height: size.iconSize / 4)
-                    .offset(y: size.iconSize / 6)
-            }
-            .clipShape(Circle())
+            // Single wave with swirl
+            SwirlWaveShape(animationOffset: waveOffset)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.9),
+                            Color.cyan.opacity(0.8),
+                            Color.white.opacity(0.7)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    style: StrokeStyle(
+                        lineWidth: size.iconSize / 20,
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
+                .frame(width: size.iconSize * 0.65, height: size.iconSize * 0.35)
+                .offset(y: size.iconSize * 0.05)
         }
         .scaleEffect(isAnimating ? 1 : 0.9)
         .opacity(isAnimating ? 1 : 0.5)
         .animation(.spring(response: 0.6, dampingFraction: 0.7), value: isAnimating)
     }
-    
-    private func computerIcon(index: Int) -> some View {
-        let positions: [(x: CGFloat, y: CGFloat)] = [
-            (-0.2, -0.15), (0.2, -0.1), (0, 0.05), (-0.25, 0.1), (0.25, 0.15)
-        ]
-        let pos = positions[index]
-        let floatOffset = sin(waveOffset + CGFloat(index) * 0.8) * (size.iconSize / 30)
-        
-        return Image(systemName: "desktopcomputer")
-            .font(.system(size: size.iconSize / 6))
-            .foregroundColor(.white.opacity(0.9))
-            .offset(
-                x: pos.x * size.iconSize,
-                y: pos.y * size.iconSize + floatOffset
-            )
-    }
 }
 
-// Custom wave shape
+// Custom wave shape for underline
 struct WaveShape: Shape {
     var offset: CGFloat
     var amplitude: CGFloat
@@ -158,6 +148,67 @@ struct WaveShape: Shape {
             let y = midY + sin(relativeX * .pi * 2 + offset) * amplitude
             path.addLine(to: CGPoint(x: x, y: y))
         }
+        
+        return path
+    }
+}
+
+// Single wave with swirl at the end - the main logo icon
+struct SwirlWaveShape: Shape {
+    var animationOffset: CGFloat
+    
+    var animatableData: CGFloat {
+        get { animationOffset }
+        set { animationOffset = newValue }
+    }
+    
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        
+        let width = rect.width
+        let height = rect.height
+        let midY = rect.midY
+        
+        // Start on the left
+        let startX: CGFloat = 0
+        let startY = midY + sin(animationOffset) * (height * 0.15)
+        
+        path.move(to: CGPoint(x: startX, y: startY))
+        
+        // Wave body - gentle S-curve
+        let waveEndX = width * 0.65
+        let waveControlY1 = midY - height * 0.35 + sin(animationOffset + 0.5) * (height * 0.1)
+        let waveControlY2 = midY + height * 0.35 + sin(animationOffset + 1.0) * (height * 0.1)
+        
+        path.addCurve(
+            to: CGPoint(x: waveEndX, y: midY + sin(animationOffset + 1.5) * (height * 0.1)),
+            control1: CGPoint(x: width * 0.25, y: waveControlY1),
+            control2: CGPoint(x: width * 0.45, y: waveControlY2)
+        )
+        
+        // The swirl/curl at the end - curls upward and inward
+        let swirlStartX = waveEndX
+        let swirlStartY = midY + sin(animationOffset + 1.5) * (height * 0.1)
+        
+        // Swirl curves up and back on itself
+        let swirlMidX = width * 0.85
+        let swirlTopY = midY - height * 0.4 + sin(animationOffset + 2.0) * (height * 0.08)
+        let swirlEndX = width * 0.72
+        let swirlEndY = midY - height * 0.15 + sin(animationOffset + 2.5) * (height * 0.05)
+        
+        // First part of swirl - curves up
+        path.addCurve(
+            to: CGPoint(x: swirlMidX, y: swirlTopY),
+            control1: CGPoint(x: swirlStartX + width * 0.1, y: swirlStartY - height * 0.1),
+            control2: CGPoint(x: swirlMidX, y: swirlStartY - height * 0.25)
+        )
+        
+        // Second part of swirl - curls inward (the spiral end)
+        path.addCurve(
+            to: CGPoint(x: swirlEndX, y: swirlEndY),
+            control1: CGPoint(x: width * 0.88, y: swirlTopY + height * 0.05),
+            control2: CGPoint(x: width * 0.78, y: swirlEndY - height * 0.08)
+        )
         
         return path
     }
