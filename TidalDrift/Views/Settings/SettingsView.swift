@@ -15,6 +15,11 @@ struct SettingsView: View {
                     Label("Network", systemImage: "network")
                 }
             
+            PermissionDiagnosticView()
+                .tabItem {
+                    Label("Permissions", systemImage: "hand.raised")
+                }
+            
             SecuritySettingsView()
                 .tabItem {
                     Label("Security", systemImage: "lock.shield")
@@ -30,7 +35,7 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 550, height: 450)
+        .frame(width: 600, height: 520)
     }
 }
 
