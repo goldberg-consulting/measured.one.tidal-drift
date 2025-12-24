@@ -135,13 +135,10 @@ struct DashboardView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        if discoveryService.isScanningSubnet {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                        } else {
-                            Image(systemName: "network")
-                        }
-                        Text("Scan Subnet")
+                        ScanButtonIcon(isScanning: discoveryService.isScanningSubnet)
+                            .frame(width: 18, height: 18)
+                        
+                        Text(discoveryService.isScanningSubnet ? "Scanning..." : "Scan Subnet")
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -274,6 +271,73 @@ struct RecentConnectionRow: View {
                 .fill(record.wasSuccessful ? Color.green : Color.red)
                 .frame(width: 8, height: 8)
         }
+    }
+}
+
+// Animated scan button icon - pulses and rotates when scanning
+struct ScanButtonIcon: View {
+    let isScanning: Bool
+    @State private var rotation: Double = 0
+    @State private var pulse: CGFloat = 1.0
+    @State private var ringScale: CGFloat = 0.5
+    
+    var body: some View {
+        ZStack {
+            // Pulsing rings when scanning
+            if isScanning {
+                // Outer expanding ring
+                Circle()
+                    .stroke(Color.white.opacity(0.4), lineWidth: 1.5)
+                    .scaleEffect(ringScale)
+                    .opacity(2 - Double(ringScale))
+                
+                // Inner ring
+                Circle()
+                    .stroke(Color.white.opacity(0.6), lineWidth: 1)
+                    .scaleEffect(pulse)
+            }
+            
+            // Main icon - radar/wifi style
+            Image(systemName: isScanning ? "dot.radiowaves.left.and.right" : "network")
+                .font(.system(size: 12, weight: .semibold))
+                .rotationEffect(.degrees(isScanning ? rotation : 0))
+                .scaleEffect(isScanning ? pulse : 1.0)
+        }
+        .onChange(of: isScanning) { scanning in
+            if scanning {
+                startAnimations()
+            } else {
+                stopAnimations()
+            }
+        }
+        .onAppear {
+            if isScanning {
+                startAnimations()
+            }
+        }
+    }
+    
+    private func startAnimations() {
+        // Continuous rotation
+        withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+            rotation = 360
+        }
+        
+        // Pulse animation
+        withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+            pulse = 1.15
+        }
+        
+        // Ring expansion
+        withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
+            ringScale = 1.8
+        }
+    }
+    
+    private func stopAnimations() {
+        rotation = 0
+        pulse = 1.0
+        ringScale = 0.5
     }
 }
 
