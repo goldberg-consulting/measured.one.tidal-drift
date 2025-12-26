@@ -1,204 +1,259 @@
 import SwiftUI
 
 struct DeviceCardView: View {
+    @EnvironmentObject var viewModel: DashboardViewModel
     let device: DiscoveredDevice
     let onTap: () -> Void
     
     @State private var isHovering = false
     @State private var isPressed = false
+    @State private var isTargetedForDrop = false
+    
+    @ObservedObject private var dropService = TidalDropService.shared
     
     var body: some View {
-        VStack(spacing: 10) {
-            // Device icon with TidalDrift badge
-            ZStack(alignment: .bottomTrailing) {
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: device.isTidalDriftPeer 
-                                    ? [Color.tidalDriftPeer.opacity(0.3), Color.tidalDriftPeer.opacity(0.15)]
-                                    : [.accentColor.opacity(0.2), .accentColor.opacity(0.1)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
+        VStack(spacing: 8) {
+            deviceIconSection
+            deviceInfoSection
+            serviceBadgeSection
+            peerInfoSection
+            onlineStatusSection
+            actionButtonsSection
+        }
+        .padding(12)
+        .frame(width: 160)
+        .background(cardBackground)
+        .overlay(cardOverlay)
+        .shadow(color: shadowColor, radius: isHovering ? 8 : 4, x: 0, y: isHovering ? 4 : 2)
+        .scaleEffect(isPressed ? 0.97 : 1.0)
+        .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isHovering)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.15)) { isHovering = hovering }
+        }
+        .onTapGesture { handleTap() }
+        .onDrop(of: [.fileURL], isTargeted: $isTargetedForDrop) { providers in
+            handleDrop(providers: providers)
+        }
+    }
+    
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .fill(Color(nsColor: .controlBackgroundColor).opacity(isHovering ? 0.95 : 0.8))
+    }
+    
+    private var cardOverlay: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .stroke(isTargetedForDrop ? Color.accentColor : (device.isTidalDriftPeer ? Color.tidalDriftPeer.opacity(0.4) : Color.primary.opacity(0.05)), lineWidth: isTargetedForDrop ? 2 : 1)
+    }
+    
+    private var shadowColor: Color {
+        device.isTidalDriftPeer 
+            ? Color.tidalDriftPeer.opacity(isHovering ? 0.15 : 0.08)
+            : Color.black.opacity(isHovering ? 0.08 : 0.03)
+    }
+    
+    private func handleTap() {
+        withAnimation { isPressed = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation { isPressed = false }
+            onTap()
+        }
+    }
+    
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: URL.self) { url, error in
+            if let url = url {
+                DispatchQueue.main.async {
+                    TidalDropService.shared.sendFile(at: url, to: device.ipAddress)
+                }
+            }
+        }
+        return true
+    }
+    
+    private var deviceIconSection: some View {
+        ZStack(alignment: .bottomTrailing) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: device.isTidalDriftPeer 
+                                ? [Color.tidalDriftPeer.opacity(0.15), Color.tidalDriftPeer.opacity(0.05)]
+                                : [Color.secondary.opacity(0.1), Color.secondary.opacity(0.05)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
                         )
-                        .frame(width: 56, height: 56)
-                    
-                    Image(systemName: device.deviceIcon)
-                        .font(.system(size: 26))
-                        .foregroundColor(device.isTidalDriftPeer ? .tidalDriftPeer : .accentColor)
-                }
+                    )
+                    .frame(width: 48, height: 48)
                 
-                // TidalDrift peer badge
-                if device.isTidalDriftPeer {
-                    Image(systemName: "wave.3.right.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(.tidalDriftPeer)
-                        .background(Circle().fill(Color(nsColor: .controlBackgroundColor)).padding(-2))
-                        .offset(x: 4, y: 4)
-                }
+                Image(systemName: device.deviceIcon)
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundColor(device.isTidalDriftPeer ? .tidalDriftPeer : .primary.opacity(0.8))
             }
             
-            VStack(spacing: 3) {
-                Text(device.name)
-                    .font(.headline)
+            if device.isTidalDriftPeer {
+                Circle()
+                    .fill(Color.tidalDriftPeer)
+                    .frame(width: 14, height: 14)
+                    .overlay(
+                        Image(systemName: "wave.3.right")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundColor(.white)
+                    )
+                    .background(Circle().stroke(Color(nsColor: .controlBackgroundColor), lineWidth: 2))
+                    .offset(x: 2, y: 2)
+            }
+        }
+        .padding(.top, 4)
+    }
+    
+    private var deviceInfoSection: some View {
+        VStack(spacing: 2) {
+            Text(device.name)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+            
+            Text(device.ipAddress)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+            
+            if device.isTidalDriftPeer, let model = device.peerModelName, !model.isEmpty {
+                Text(model)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.tidalDriftPeer.opacity(0.8))
                     .lineLimit(1)
-                
-                Text(device.ipAddress)
-                    .font(.caption)
+            }
+        }
+    }
+    
+    private var serviceBadgeSection: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(device.services).sorted(by: { $0.rawValue < $1.rawValue }), id: \.self) { service in
+                Image(systemName: service.icon)
+                    .font(.system(size: 10))
                     .foregroundColor(.secondary)
-                    .lineLimit(1)
-                
-                // Show model info for TidalDrift peers
-                if device.isTidalDriftPeer, let model = device.peerModelName, !model.isEmpty {
-                    Text(model)
-                        .font(.caption2)
-                        .foregroundColor(.tidalDriftPeer)
-                        .lineLimit(1)
-                }
             }
             
-            // Service badges
-            HStack(spacing: 4) {
-                ForEach(Array(device.services), id: \.self) { service in
-                    ServiceBadge(service: service)
-                }
-                
-                if device.isTidalDriftPeer {
-                    TidalDriftBadge()
-                }
+            if device.isTidalDriftPeer {
+                Image(systemName: "bolt.shield.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(.tidalDriftPeer.opacity(0.6))
             }
-            
-            // Extra info for TidalDrift peers (on hover)
-            if device.isTidalDriftPeer && isHovering {
+        }
+        .padding(.vertical, 2)
+    }
+    
+    private var peerInfoSection: some View {
+        Group {
+            if device.isTidalDriftPeer {
                 VStack(spacing: 2) {
                     if let processor = device.peerProcessorInfo, !processor.isEmpty {
                         Text(processor)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary.opacity(0.8))
                             .lineLimit(1)
                     }
-                    if let memory = device.peerMemoryGB, memory > 0,
-                       let macOS = device.peerMacOSVersion, !macOS.isEmpty {
-                        Text("\(memory)GB RAM • macOS \(macOS)")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    if let user = device.peerUserName, !user.isEmpty {
-                        Text("User: \(user)")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                    
+                    if isHovering {
+                        hoverInfoSection
                     }
                 }
-                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                .frame(height: isHovering ? 24 : 10)
+            } else {
+                Spacer().frame(height: 10)
             }
+        }
+    }
+    
+    private var hoverInfoSection: some View {
+        VStack(spacing: 1) {
+            if let memory = device.peerMemoryGB, memory > 0,
+               let macOS = device.peerMacOSVersion, !macOS.isEmpty {
+                Text("\(memory)GB RAM • macOS \(macOS)")
+                    .font(.system(size: 8))
+                    .foregroundColor(.secondary)
+            }
+            
+            HStack(spacing: 4) {
+                if let user = device.peerUserName, !user.isEmpty {
+                    Text(user)
+                }
+            }
+            .font(.system(size: 8))
+            .foregroundColor(.secondary)
+        }
+        .transition(.opacity)
+    }
+    
+    private var onlineStatusSection: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(device.isOnline ? Color.green : Color.secondary.opacity(0.3))
+                .frame(width: 6, height: 6)
+            
+            Text(device.isOnline ? "ONLINE" : device.lastSeenText.uppercased())
+                .font(.system(size: 8, weight: .bold))
+                .foregroundColor(device.isOnline ? .green : .secondary)
+        }
+        .padding(.bottom, 4)
+    }
+    
+    private var actionButtonsSection: some View {
+        VStack(spacing: 6) {
+            Button(action: { onTap() }) {
+                HStack(spacing: 4) {
+                    Image(systemName: device.isTidalDriftPeer ? "macwindow.on.rectangle" : "link")
+                    Text(device.isTidalDriftPeer ? "SCREEN SHARE" : "CONNECT")
+                }
+                .font(.system(size: 9, weight: .bold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(device.isTidalDriftPeer ? Color.tidalDriftPeer : Color.accentColor))
+                .foregroundColor(.white)
+            }
+            .buttonStyle(.plain)
             
             HStack(spacing: 6) {
-                StatusIndicator(isOnline: device.isOnline, size: 8)
+                if device.isTidalDriftPeer || device.services.contains(.ssh) {
+                    Button(action: {
+                        Task { await viewModel.connectToDevice(device, service: .ssh) }
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "terminal.fill")
+                            Text("SSH")
+                        }
+                        .font(.system(size: 8, weight: .bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.2)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Quick SSH")
+                }
                 
-                if device.isOnline {
-                    Text("Online")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                } else if device.isStale {
-                    Text("Seen \(device.lastSeenText)")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                } else {
-                    Text("Seen \(device.lastSeenText)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                if device.isTidalDriftPeer || device.services.contains(.fileSharing) || device.services.contains(.afp) {
+                    Button(action: {
+                        Task {
+                            let service: DiscoveredDevice.ServiceType = device.isTidalDriftPeer ? .tidalDrop : (device.services.contains(.fileSharing) ? .fileSharing : .afp)
+                            await viewModel.connectToDevice(device, service: service)
+                        }
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "folder.fill")
+                            Text("FILES")
+                        }
+                        .font(.system(size: 8, weight: .bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.2)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open Files")
                 }
             }
-            
-            Button("Connect") {
-                onTap()
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
         }
-        .padding(14)
-        .frame(minWidth: 170, maxWidth: 220)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(device.isTidalDriftPeer 
-                    ? Color.tidalDriftPeer.opacity(0.05)
-                    : Color(nsColor: .controlBackgroundColor))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(device.isTidalDriftPeer ? Color.tidalDriftPeerGlow : Color.clear, lineWidth: 2)
-                )
-                .shadow(
-                    color: isHovering 
-                        ? (device.isTidalDriftPeer ? Color.tidalDriftPeer.opacity(0.4) : .accentColor.opacity(0.2)) 
-                        : (device.isTidalDriftPeer ? Color.tidalDriftPeer.opacity(0.2) : .black.opacity(0.1)),
-                    radius: isHovering ? 12 : (device.isTidalDriftPeer ? 8 : 6),
-                    x: 0,
-                    y: isHovering ? 6 : 3
-                )
-        )
-        .scaleEffect(isPressed ? 0.98 : 1.0)
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
-        .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isPressed)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isHovering = hovering
-            }
-        }
-        .onTapGesture {
-            withAnimation {
-                isPressed = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                withAnimation {
-                    isPressed = false
-                }
-                onTap()
-            }
-        }
-    }
-}
-
-struct TidalDriftBadge: View {
-    var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "wave.3.right")
-                .font(.system(size: 8))
-        }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
-        .background(
-            Capsule()
-                .fill(Color.tidalDriftPeerLight)
-        )
-        .foregroundColor(.tidalDriftPeer)
-    }
-}
-
-struct ServiceBadge: View {
-    let service: DiscoveredDevice.ServiceType
-    
-    var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: service.icon)
-                .font(.system(size: 9))
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .background(
-            Capsule()
-                .fill(Color.secondary.opacity(0.15))
-        )
-        .foregroundColor(.secondary)
-    }
-}
-
-struct DeviceCardView_Previews: PreviewProvider {
-    static var previews: some View {
-        HStack {
-            DeviceCardView(device: .preview) {}
-            DeviceCardView(device: DiscoveredDevice.previewList[2]) {}
-        }
-        .padding()
+        .padding(.bottom, 4)
     }
 }

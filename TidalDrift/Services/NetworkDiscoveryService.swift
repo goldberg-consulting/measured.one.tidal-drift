@@ -9,6 +9,7 @@ class NetworkDiscoveryService: ObservableObject {
     @Published var lastScanDate: Date?
     
     private var browsers: [NWBrowser] = []
+    private var udpListener: NWListener?
     private var deviceCache: [String: DiscoveredDevice] = [:]
     private var scanTimer: Timer?
     private var pathMonitor: NWPathMonitor?
@@ -33,6 +34,41 @@ class NetworkDiscoveryService: ObservableObject {
     private init() {
         loadSavedDevices()
         setupNetworkMonitor()
+        startUDPListener()
+    }
+    
+    func startUDPListener() {
+        do {
+            let params = NWParameters.udp
+            
+            udpListener = try NWListener(using: params, on: 5903)
+            udpListener?.stateUpdateHandler = { state in
+                if case .ready = state { print("🌊 UDP Listener: Ready on port 5903") }
+            }
+            
+            udpListener?.newConnectionHandler = { [weak self] connection in
+                connection.start(queue: self?.queue ?? .main)
+                self?.receiveHeartbeat(on: connection)
+            }
+            udpListener?.start(queue: queue)
+        } catch {
+            print("❌ UDP Listener: Initialization failed: \(error)")
+        }
+    }
+    
+    private func receiveHeartbeat(on connection: NWConnection) {
+        connection.receiveMessage { [weak self] data, _, _, error in
+            if let data = data {
+                if let peerInfo = try? JSONDecoder().decode(TidalDriftPeerService.PeerInfo.self, from: data) {
+                    print("🌊 UDP Heartbeat: Received from \(peerInfo.hostname)")
+                    self?.markAsTidalDriftPeer(hostname: peerInfo.hostname, peerInfo: peerInfo)
+                }
+            }
+            
+            if error == nil {
+                self?.receiveHeartbeat(on: connection)
+            }
+        }
     }
     
     // MARK: - Persistence

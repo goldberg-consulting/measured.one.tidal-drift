@@ -87,12 +87,21 @@ class DashboardViewModel: ObservableObject {
         
         do {
             switch service {
-            case .screenSharing:
+            case .screenSharing, .tidalDrift:
                 try await ScreenShareConnectionService.shared.connect(to: device)
             case .fileSharing:
                 try await ScreenShareConnectionService.shared.connectToFileShare(device: device)
             case .afp:
                 try await ScreenShareConnectionService.shared.connectToAFP(device: device)
+            case .ssh:
+                ScreenShareConnectionService.shared.connectToSSH(device: device)
+            case .tidalDrop:
+                // For now, handle as file sharing
+                if device.services.contains(.fileSharing) {
+                    try await ScreenShareConnectionService.shared.connectToFileShare(device: device)
+                } else if device.services.contains(.afp) {
+                    try await ScreenShareConnectionService.shared.connectToAFP(device: device)
+                }
             }
             
             let record = ConnectionRecord(

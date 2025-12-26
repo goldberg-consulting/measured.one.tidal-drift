@@ -161,6 +161,44 @@ struct NetworkUtils {
         return isReachable && !needsConnection
     }
     
+    static func getBroadcastAddress() -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        
+        guard getifaddrs(&ifaddr) == 0, let firstAddr = ifaddr else {
+            return "255.255.255.255"
+        }
+        
+        defer { freeifaddrs(ifaddr) }
+        
+        var ptr = firstAddr
+        while true {
+            let interface = ptr.pointee
+            let addrFamily = interface.ifa_addr.pointee.sa_family
+            
+            if addrFamily == UInt8(AF_INET) {
+                let name = String(cString: interface.ifa_name)
+                // Filter for Wi-Fi (en0/en1) or Ethernet (en0/en1/en2...)
+                if name.hasPrefix("en") || name.hasPrefix("eth") {
+                    if let dstaddr = interface.ifa_dstaddr {
+                        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                        getnameinfo(dstaddr, socklen_t(dstaddr.pointee.sa_len),
+                                   &hostname, socklen_t(hostname.count),
+                                   nil, socklen_t(0), NI_NUMERICHOST)
+                        let address = String(cString: hostname)
+                        if address != "0.0.0.0" && address != "127.0.0.1" {
+                            return address
+                        }
+                    }
+                }
+            }
+            
+            guard let next = interface.ifa_next else { break }
+            ptr = next
+        }
+        
+        return "255.255.255.255"
+    }
+    
     static func getMACAddress(for interfaceName: String = "en0") -> String? {
         return nil
     }

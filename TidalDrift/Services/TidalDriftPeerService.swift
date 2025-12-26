@@ -40,8 +40,12 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     private let queue = DispatchQueue(label: "com.tidaldrift.peer.network", qos: .userInitiated)
     private var cancellables = Set<AnyCancellable>()
     
+    private var telemetryTimer: Timer?
+    private var udpHeartbeatTimer: Timer?
+    
     private let serviceType = "_tidaldrift._tcp"
-    private let deviceName = Host.current().localizedName ?? "TidalDrift"
+    private let dropServiceType = "_tidaldrop._tcp"
+    private let deviceName = (Host.current().localizedName ?? "TidalDrift").replacingOccurrences(of: "'", with: "").replacingOccurrences(of: " ", with: "-")
     
     private let localInfo: PeerInfo
     
@@ -165,17 +169,64 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             listener?.start(queue: queue)
             Self.log("Advertising started for \(serviceType)")
             
+            // Start UDP Heartbeat
+            startUDPHeartbeat()
+            
         } catch {
             Self.log("❌ Failed to start listener: \(error)")
         }
     }
     
     func stopAdvertising() {
+        telemetryTimer?.invalidate()
+        telemetryTimer = nil
+        udpHeartbeatTimer?.invalidate()
+        udpHeartbeatTimer = nil
+        
         listener?.cancel()
         listener = nil
         DispatchQueue.main.async {
             self.isAdvertising = false
         }
+    }
+    
+    private func startUDPHeartbeat() {
+        udpHeartbeatTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.sendUDPHeartbeat()
+        }
+    }
+    
+    private func sendUDPHeartbeat() {
+        let broadcastAddress = NetworkUtils.getBroadcastAddress() ?? "255.255.255.255"
+        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(broadcastAddress), port: 5903)
+        
+        Self.log("📡 Sending UDP Heartbeat to \(broadcastAddress):5903")
+        
+        let params = NWParameters.udp
+        if let ipOptions = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ipOptions.version = .v4
+        }
+        
+        let connection = NWConnection(to: endpoint, using: params)
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                if let data = try? JSONEncoder().encode(self?.localInfo) {
+                    connection.send(content: data, completion: .contentProcessed({ error in
+                        if let error = error {
+                            Self.log("❌ UDP Heartbeat send error: \(error)")
+                        }
+                        connection.cancel()
+                    }))
+                }
+            case .failed(let error):
+                Self.log("❌ UDP Heartbeat connection failed: \(error)")
+                connection.cancel()
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
     }
     
     private func createTXTRecord() -> NWTXTRecord {

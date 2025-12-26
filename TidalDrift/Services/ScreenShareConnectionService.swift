@@ -221,6 +221,16 @@ class ScreenShareConnectionService {
         }
     }
     
+    func connectToSSH(device: DiscoveredDevice, username: String? = nil) {
+        let user = username ?? NSUserName()
+        let script = "tell application \"Terminal\" to do script \"ssh \(user)@\(device.ipAddress)\" activate"
+        
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: script) {
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+    
     func testConnection(to ipAddress: String, port: Int = 5900) async -> Bool {
         return await withCheckedContinuation { continuation in
             let host = NWEndpoint.Host(ipAddress)

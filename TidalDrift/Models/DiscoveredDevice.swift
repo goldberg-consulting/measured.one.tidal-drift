@@ -66,12 +66,18 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
         case screenSharing = "_rfb._tcp."
         case fileSharing = "_smb._tcp."
         case afp = "_afpovertcp._tcp."
+        case ssh = "_ssh._tcp."
+        case tidalDrift = "_tidaldrift._tcp."
+        case tidalDrop = "_tidaldrop._tcp."
         
         var displayName: String {
             switch self {
             case .screenSharing: return "Screen Sharing"
             case .fileSharing: return "File Sharing"
             case .afp: return "AFP"
+            case .ssh: return "SSH"
+            case .tidalDrift: return "TidalDrift"
+            case .tidalDrop: return "TidalDrop"
             }
         }
         
@@ -80,6 +86,9 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
             case .screenSharing: return "rectangle.on.rectangle"
             case .fileSharing: return "folder"
             case .afp: return "externaldrive.connected.to.line.below"
+            case .ssh: return "terminal"
+            case .tidalDrift: return "wave.3.right"
+            case .tidalDrop: return "arrow.down.doc"
             }
         }
     }

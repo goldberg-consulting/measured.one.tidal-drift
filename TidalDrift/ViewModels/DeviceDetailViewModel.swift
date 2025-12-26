@@ -66,7 +66,7 @@ class DeviceDetailViewModel: ObservableObject {
         
         do {
             switch service {
-            case .screenSharing:
+            case .screenSharing, .tidalDrift:
                 let usernameToUse = username.isEmpty ? nil : username
                 let passwordToUse = password.isEmpty ? nil : password
                 try await ScreenShareConnectionService.shared.connect(
@@ -87,6 +87,17 @@ class DeviceDetailViewModel: ObservableObject {
                     device: device,
                     username: usernameToUse
                 )
+            case .ssh:
+                ScreenShareConnectionService.shared.connectToSSH(
+                    device: device,
+                    username: username.isEmpty ? nil : username
+                )
+            case .tidalDrop:
+                if device.services.contains(.fileSharing) {
+                    try await ScreenShareConnectionService.shared.connectToFileShare(device: device, username: username.isEmpty ? nil : username)
+                } else if device.services.contains(.afp) {
+                    try await ScreenShareConnectionService.shared.connectToAFP(device: device, username: username.isEmpty ? nil : username)
+                }
             }
             
             saveCredentialsIfNeeded()
