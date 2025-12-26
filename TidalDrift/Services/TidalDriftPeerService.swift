@@ -202,6 +202,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         
         Self.log("📡 Sending UDP Heartbeat to \(broadcastAddress):5903")
         
+        // Create UDP parameters with broadcast enabled
         let params = NWParameters.udp
         if let ipOptions = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
             ipOptions.version = .v4
@@ -211,7 +212,8 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                if let data = try? JSONEncoder().encode(self?.localInfo) {
+                guard let self = self else { return }
+                if let data = try? JSONEncoder().encode(self.localInfo) {
                     connection.send(content: data, completion: .contentProcessed({ error in
                         if let error = error {
                             Self.log("❌ UDP Heartbeat send error: \(error)")

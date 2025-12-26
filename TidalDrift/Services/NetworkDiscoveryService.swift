@@ -25,12 +25,8 @@ class NetworkDiscoveryService: ObservableObject {
         "_smb._tcp",           // Windows/Samba File Sharing
         "_afpovertcp._tcp",    // AFP (Apple Filing Protocol)
         "_ssh._tcp",           // SSH
-        "_tidaldrift._tcp",    // TidalDrift
-        "_tidaldrop._tcp",     // TidalDrop
-        "_net-assistant._udp", // Apple Remote Desktop
-        "_eppc._tcp",          // Remote Apple Events
-        "_device-info._tcp",   // Device Info
-        "_companion-link._tcp" // Continuity/Handoff
+        "_tidaldrift._tcp",    // TidalDrift Discovery
+        "_tidaldrop._tcp"      // TidalDrop Transfer
     ]
     
     private init() {
@@ -40,9 +36,9 @@ class NetworkDiscoveryService: ObservableObject {
     }
     
     func startUDPListener() {
+        let params = NWParameters.udp
+        
         do {
-            let params = NWParameters.udp
-            
             udpListener = try NWListener(using: params, on: 5903)
             udpListener?.stateUpdateHandler = { state in
                 if case .ready = state { print("🌊 UDP Listener: Ready on port 5903") }
@@ -50,7 +46,7 @@ class NetworkDiscoveryService: ObservableObject {
             
             udpListener?.newConnectionHandler = { [weak self] connection in
                 connection.start(queue: self?.queue ?? .main)
-                self?.receiveHeartbeat(on: connection)
+                self?.receiveMessages(on: connection)
             }
             udpListener?.start(queue: queue)
         } catch {
@@ -58,17 +54,19 @@ class NetworkDiscoveryService: ObservableObject {
         }
     }
     
-    private func receiveHeartbeat(on connection: NWConnection) {
-        connection.receiveMessage { [weak self] data, _, _, error in
-            if let data = data {
+    private func receiveMessages(on connection: NWConnection) {
+        connection.receiveMessage { [weak self] data, context, isComplete, error in
+            if let data = data, !data.isEmpty {
                 if let peerInfo = try? JSONDecoder().decode(TidalDriftPeerService.PeerInfo.self, from: data) {
-                    print("🌊 UDP Heartbeat: Received from \(peerInfo.hostname)")
+                    print("🌊 UDP Heartbeat: Received from \(peerInfo.hostname) (\(peerInfo.ipAddress))")
                     self?.markAsTidalDriftPeer(hostname: peerInfo.hostname, peerInfo: peerInfo)
                 }
             }
             
             if error == nil {
-                self?.receiveHeartbeat(on: connection)
+                self?.receiveMessages(on: connection)
+            } else {
+                connection.cancel()
             }
         }
     }
@@ -497,6 +495,12 @@ class NetworkDiscoveryService: ObservableObject {
             return .fileSharing
         case "_afpovertcp._tcp", "_afpovertcp._tcp.":
             return .afp
+        case "_ssh._tcp", "_ssh._tcp.":
+            return .ssh
+        case "_tidaldrift._tcp", "_tidaldrift._tcp.":
+            return .tidalDrift
+        case "_tidaldrop._tcp", "_tidaldrop._tcp.":
+            return .tidalDrop
         default:
             return nil
         }

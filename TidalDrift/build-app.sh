@@ -87,9 +87,11 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
         <string>_rfb._tcp</string>
         <string>_smb._tcp</string>
         <string>_afpovertcp._tcp</string>
+        <string>_ssh._tcp</string>
         <string>_tidaldrift._tcp</string>
         <string>_tidalclip._tcp</string>
         <string>_tidalstream._tcp</string>
+        <string>_tidaldrop._tcp</string>
     </array>
     <key>NSHumanReadableCopyright</key>
     <string>© 2024 Goldberg Consulting, LLC. All rights reserved.</string>
