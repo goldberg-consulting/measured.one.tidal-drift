@@ -718,6 +718,7 @@ class NetworkDiscoveryService: ObservableObject {
             let hasScreenSharing: Bool
             let hasFileSharing: Bool
             let hasAFP: Bool
+            let hasSSH: Bool
         }
         
         // Scan in batches, processing nearby IPs first for faster initial results
@@ -730,16 +731,18 @@ class NetworkDiscoveryService: ObservableObject {
                 for hostNum in batch {
                     let ip = "\(subnet).\(hostNum)"
                     group.addTask {
-                        // Check all three services in parallel for each IP
+                        // Check all services in parallel for each IP
                         async let screenShare = self.scanIP(ip, port: 5900)
                         async let fileShare = self.scanIP(ip, port: 445)
                         async let afp = self.scanIP(ip, port: 548)
+                        async let ssh = self.scanIP(ip, port: 22)
                         
                         return ScanResult(
                             ip: ip,
                             hasScreenSharing: await screenShare,
                             hasFileSharing: await fileShare,
-                            hasAFP: await afp
+                            hasAFP: await afp,
+                            hasSSH: await ssh
                         )
                     }
                 }
@@ -750,7 +753,7 @@ class NetworkDiscoveryService: ObservableObject {
                         scanProgress = Double(scanned) / Double(totalIPs)
                     }
                     
-                    let hasAnyService = result.hasScreenSharing || result.hasFileSharing || result.hasAFP
+                    let hasAnyService = result.hasScreenSharing || result.hasFileSharing || result.hasAFP || result.hasSSH
                     
                     if hasAnyService {
                         let name = self.getHostname(for: result.ip) ?? "Mac at \(result.ip)"
@@ -765,6 +768,9 @@ class NetworkDiscoveryService: ObservableObject {
                             if result.hasAFP {
                                 self.addOrUpdateDevice(name: name, ipAddress: result.ip, port: 548, service: .afp)
                             }
+                            if result.hasSSH {
+                                self.addOrUpdateDevice(name: name, ipAddress: result.ip, port: 22, service: .ssh)
+                            }
                         }
                     }
                 }
@@ -777,7 +783,7 @@ class NetworkDiscoveryService: ObservableObject {
         }
     }
     
-    /// Scan common VNC/screen sharing ports on a single IP
+    /// Scan common ports on a single IP
     func scanIPForAllServices(_ ipAddress: String) async {
         // Check VNC (screen sharing)
         if await scanIP(ipAddress, port: 5900) {
@@ -800,6 +806,14 @@ class NetworkDiscoveryService: ObservableObject {
             let name = getHostname(for: ipAddress) ?? "Mac at \(ipAddress)"
             await MainActor.run {
                 addOrUpdateDevice(name: name, ipAddress: ipAddress, port: 548, service: .afp)
+            }
+        }
+
+        // Check SSH
+        if await scanIP(ipAddress, port: 22) {
+            let name = getHostname(for: ipAddress) ?? "Mac at \(ipAddress)"
+            await MainActor.run {
+                addOrUpdateDevice(name: name, ipAddress: ipAddress, port: 22, service: .ssh)
             }
         }
     }
