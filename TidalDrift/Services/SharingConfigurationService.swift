@@ -2,6 +2,9 @@ import Foundation
 import Combine
 import AppKit
 import Network
+import os.log
+
+private let logger = Logger(subsystem: "com.tidaldrift", category: "SharingConfig")
 
 class SharingConfigurationService: ObservableObject {
     static let shared = SharingConfigurationService()
@@ -130,6 +133,8 @@ class SharingConfigurationService: ObservableObject {
     }
     
     func isRemoteLoginEnabled() async -> Bool {
+        logger.info("Checking Remote Login status...")
+        
         // Method 1: Check by testing local port 22
         let portCheck = await withCheckedContinuation { continuation in
             let host = NWEndpoint.Host("127.0.0.1")
@@ -140,10 +145,12 @@ class SharingConfigurationService: ObservableObject {
             connection.stateUpdateHandler = { state in
                 guard !didResume else { return }
                 if case .ready = state {
+                    logger.info("Port 22 check: OPEN (connection ready)")
                     didResume = true
                     connection.cancel()
                     continuation.resume(returning: true)
-                } else if case .failed = state {
+                } else if case .failed(let error) = state {
+                    logger.info("Port 22 check: CLOSED (failed: \(error))")
                     didResume = true
                     connection.cancel()
                     continuation.resume(returning: false)
@@ -155,16 +162,20 @@ class SharingConfigurationService: ObservableObject {
             // 2.0 second timeout for local check (SSH can be slow to start)
             DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
                 guard !didResume else { return }
+                logger.info("Port 22 check: TIMEOUT")
                 didResume = true
                 connection.cancel()
                 continuation.resume(returning: false)
             }
         }
         
-        if portCheck { return true }
+        if portCheck {
+            logger.info("Result: SSH ENABLED (port check passed)")
+            return true
+        }
         
         // Method 2: Check via launchctl list as fallback
-        return await withCheckedContinuation { continuation in
+        let launchctlCheck = await withCheckedContinuation { continuation in
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
             task.arguments = ["list"]
@@ -177,11 +188,17 @@ class SharingConfigurationService: ObservableObject {
                 task.waitUntilExit()
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8) ?? ""
-                continuation.resume(returning: output.contains("com.openssh.sshd"))
+                let found = output.contains("com.openssh.sshd")
+                logger.info("launchctl list check: \(found ? "FOUND com.openssh.sshd" : "NOT FOUND")")
+                continuation.resume(returning: found)
             } catch {
+                logger.error("launchctl list check: ERROR - \(error)")
                 continuation.resume(returning: false)
             }
         }
+        
+        logger.info("Result: SSH \(launchctlCheck ? "ENABLED" : "DISABLED") (launchctl fallback)")
+        return launchctlCheck
     }
     
     func isFirewallEnabled() async -> Bool {
@@ -292,32 +309,53 @@ class SharingConfigurationService: ObservableObject {
     
     func toggleRemoteLogin(enable: Bool) async -> Bool {
         let screenshareUser = UserDefaults.standard.string(forKey: "screenShareUsername")
+        
+        logger.info("toggleRemoteLogin called - enable: \(enable), user: \(screenshareUser ?? "none")")
+        
+        // Check current state first
+        let currentState = await isRemoteLoginEnabled()
+        logger.info("Current SSH state: \(currentState)")
+        
+        // Use launchctl approach instead of systemsetup (which requires Full Disk Access)
         let script: String
         
         if enable {
+            // Enable SSH using launchctl bootstrap
+            var command = "launchctl bootout system/com.openssh.sshd 2>/dev/null; launchctl enable system/com.openssh.sshd; launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist"
+            
+            // Also add user to SSH access group if specified
             if let user = screenshareUser {
-                // Combine enabling SSH and adding the user to the access group in one privileged command
-                script = """
-                do shell script "systemsetup -setremotelogin on && dseditgroup -o edit -a \(user) -t user com.apple.access_ssh" with administrator privileges
-                """
-            } else {
-                script = """
-                do shell script "systemsetup -setremotelogin on" with administrator privileges
-                """
+                command += " && dseditgroup -o edit -a \(user) -t user com.apple.access_ssh 2>/dev/null"
             }
-        } else {
+            
             script = """
-            do shell script "systemsetup -setremotelogin off" with administrator privileges
+            do shell script "\(command)" with administrator privileges
+            """
+        } else {
+            // Disable SSH using launchctl bootout
+            script = """
+            do shell script "launchctl bootout system/com.openssh.sshd" with administrator privileges
             """
         }
         
-        print("🌊 TidalDrift: Executing Remote Login configuration script...")
+        logger.info("Executing Remote Login configuration via launchctl...")
         let result = await runAppleScript(script)
         
         if result {
-            print("🌊 TidalDrift: Remote Login configuration SUCCESS")
+            logger.info("Remote Login launchctl command SUCCESS")
         } else {
-            print("🌊 TidalDrift: Remote Login configuration FAILED or CANCELLED")
+            logger.error("Remote Login launchctl command FAILURE (user cancelled or error)")
+        }
+        
+        // Wait a moment for system to settle
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        
+        // Verify the new state
+        let newState = await isRemoteLoginEnabled()
+        logger.info("New SSH state after command: \(newState)")
+        
+        if enable && !newState {
+            logger.warning("SSH was supposed to be enabled but port 22 is not responding - may be timing issue")
         }
         
         await refreshStatus()
@@ -339,18 +377,34 @@ class SharingConfigurationService: ObservableObject {
             task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             task.arguments = ["-e", source]
             
-            // Redirect output to avoid potential hangs on pipe buffers
-            task.standardOutput = Pipe()
-            task.standardError = Pipe()
+            // Capture output for debugging
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            task.standardOutput = stdoutPipe
+            task.standardError = stderrPipe
+            
+            logger.info("Running AppleScript: \(source.prefix(150))...")
             
             do {
                 try task.run()
-                // Use a non-blocking wait with a timeout to avoid beachballing the whole app
-                // although since we are in an async function this is mostly just safety
                 task.waitUntilExit()
+                
+                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+                let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+                
+                logger.info("osascript exit code: \(task.terminationStatus)")
+                if !stdout.isEmpty {
+                    logger.info("osascript stdout: \(stdout, privacy: .public)")
+                }
+                if !stderr.isEmpty {
+                    logger.error("osascript stderr: \(stderr, privacy: .public)")
+                }
+                
                 continuation.resume(returning: task.terminationStatus == 0)
             } catch {
-                print("❌ Failed to run osascript: \(error)")
+                logger.error("Failed to run osascript: \(error)")
                 continuation.resume(returning: false)
             }
         }

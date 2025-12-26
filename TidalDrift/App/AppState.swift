@@ -17,6 +17,7 @@ class AppState: ObservableObject {
     
     @Published var screenSharingEnabled: Bool = false
     @Published var fileSharingEnabled: Bool = false
+    @Published var remoteLoginEnabled: Bool = false
     @Published var localIPAddress: String = "Unknown"
     @Published var computerName: String = Host.current().localizedName ?? "Unknown"
     
@@ -56,6 +57,7 @@ class AppState: ObservableObject {
     func checkSharingStatus() async {
         screenSharingEnabled = await SharingConfigurationService.shared.isScreenSharingEnabled()
         fileSharingEnabled = await SharingConfigurationService.shared.isFileSharingEnabled()
+        remoteLoginEnabled = await SharingConfigurationService.shared.isRemoteLoginEnabled()
     }
     
     func toggleDeviceTrust(_ deviceId: UUID) {

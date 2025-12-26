@@ -108,9 +108,19 @@ EOF
 # Create PkgInfo
 echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
-# Ad-hoc sign the app (allows running on local machine)
+# Sign the app with development certificate and entitlements
 echo -e "${BLUE}🔏 Signing app...${NC}"
-codesign --force --deep --sign - "$APP_BUNDLE"
+
+# Try to use development certificate with entitlements for Bonjour support
+SIGN_IDENTITY=$(security find-identity -v -p codesigning | grep "Apple Development" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
+if [ -n "$SIGN_IDENTITY" ] && [ -f "TidalDrift.entitlements" ]; then
+    echo -e "${BLUE}Using certificate: $SIGN_IDENTITY${NC}"
+    codesign --force --deep --sign "$SIGN_IDENTITY" --entitlements TidalDrift.entitlements "$APP_BUNDLE"
+else
+    echo -e "${YELLOW}No development certificate found, using ad-hoc signing (Bonjour may not work)${NC}"
+    codesign --force --deep --sign - "$APP_BUNDLE"
+fi
 
 echo -e "${GREEN}✅ Build complete!${NC}"
 echo ""

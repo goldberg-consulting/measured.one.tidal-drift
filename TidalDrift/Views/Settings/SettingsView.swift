@@ -281,6 +281,8 @@ struct NetworkSettingsView: View {
                     StatusBadge(isEnabled: appState.fileSharingEnabled)
                 }
                 
+                RemoteLoginToggle()
+                
                 Button("Open Sharing Settings") {
                     SharingConfigurationService.shared.openSharingPreferences()
                 }
@@ -373,6 +375,83 @@ struct StatusBadge: View {
             Text(isEnabled ? "Enabled" : "Disabled")
                 .font(.caption)
                 .foregroundColor(isEnabled ? .green : .orange)
+        }
+    }
+}
+
+struct RemoteLoginToggle: View {
+    @State private var isEnabled: Bool = false
+    @State private var isToggling: Bool = false
+    @State private var showError: Bool = false
+    @State private var errorMessage: String = ""
+    
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Remote Login (SSH)")
+                Text("Requires admin password to change")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            if isToggling {
+                ProgressView()
+                    .scaleEffect(0.7)
+            } else {
+                Toggle("", isOn: Binding(
+                    get: { isEnabled },
+                    set: { newValue in
+                        toggleRemoteLogin(enable: newValue)
+                    }
+                ))
+                .labelsHidden()
+            }
+        }
+        .onAppear {
+            checkStatus()
+        }
+        .alert("Remote Login Error", isPresented: $showError) {
+            Button("OK") { }
+        } message: {
+            Text(errorMessage)
+        }
+    }
+    
+    private func checkStatus() {
+        Task {
+            let enabled = await SharingConfigurationService.shared.isRemoteLoginEnabled()
+            await MainActor.run {
+                isEnabled = enabled
+            }
+        }
+    }
+    
+    private func toggleRemoteLogin(enable: Bool) {
+        isToggling = true
+        
+        Task {
+            let success = await SharingConfigurationService.shared.toggleRemoteLogin(enable: enable)
+            
+            // Wait for system to process
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            
+            // Verify the new state
+            let newState = await SharingConfigurationService.shared.isRemoteLoginEnabled()
+            
+            await MainActor.run {
+                isToggling = false
+                isEnabled = newState
+                
+                if !success {
+                    errorMessage = "Failed to change Remote Login. You may have cancelled the authentication, or there was a system error."
+                    showError = true
+                } else if enable && !newState {
+                    errorMessage = "Remote Login was enabled but the SSH service doesn't appear to be running yet. Try checking again in a moment."
+                    showError = true
+                }
+            }
         }
     }
 }

@@ -4,6 +4,7 @@ struct StatusCardView: View {
     @EnvironmentObject var appState: AppState
     @State private var isTogglingScreen: Bool = false
     @State private var isTogglingFile: Bool = false
+    @State private var isTogglingSSH: Bool = false
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -50,14 +51,12 @@ struct StatusCardView: View {
                         .frame(width: 40)
                 }
                 
-                HStack {
-                    Text("SSH Discovery")
-                        .font(.caption)
-                    Spacer()
-                    Toggle("", isOn: $appState.settings.sshDiscoveryEnabled)
-                        .toggleStyle(.switch)
-                        .scaleEffect(0.7)
-                        .frame(width: 40)
+                SharingToggleRow(
+                    label: "Remote Login (SSH)",
+                    isEnabled: appState.remoteLoginEnabled,
+                    isToggling: isTogglingSSH
+                ) {
+                    toggleRemoteLogin()
                 }
             }
             
@@ -159,6 +158,25 @@ struct StatusCardView: View {
                 isTogglingFile = false
                 if success {
                     appState.fileSharingEnabled = newState
+                }
+                // Refresh to get actual state
+                Task {
+                    await appState.checkSharingStatus()
+                }
+            }
+        }
+    }
+    
+    private func toggleRemoteLogin() {
+        isTogglingSSH = true
+        let newState = !appState.remoteLoginEnabled
+        
+        Task {
+            let success = await SharingConfigurationService.shared.toggleRemoteLogin(enable: newState)
+            await MainActor.run {
+                isTogglingSSH = false
+                if success {
+                    appState.remoteLoginEnabled = newState
                 }
                 // Refresh to get actual state
                 Task {
