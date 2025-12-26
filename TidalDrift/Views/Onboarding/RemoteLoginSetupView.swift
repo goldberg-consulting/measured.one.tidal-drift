@@ -127,8 +127,8 @@ struct RemoteLoginSetupView: View {
         Task {
             let success = await SharingConfigurationService.shared.toggleRemoteLogin(enable: newState)
             
-            // Wait a moment for the system to process the command
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            // Wait longer for the system to process the command and the port to open
+            try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
             
             await MainActor.run {
                 isToggling = false

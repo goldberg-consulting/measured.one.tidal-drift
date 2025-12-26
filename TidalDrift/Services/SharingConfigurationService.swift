@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AppKit
+import Network
 
 class SharingConfigurationService: ObservableObject {
     static let shared = SharingConfigurationService()
@@ -129,23 +130,33 @@ class SharingConfigurationService: ObservableObject {
     }
     
     func isRemoteLoginEnabled() async -> Bool {
+        // Try to check by testing the local port 22
         return await withCheckedContinuation { continuation in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/sbin/systemsetup")
-            task.arguments = ["-getremotelogin"]
+            let host = NWEndpoint.Host("127.0.0.1")
+            let port = NWEndpoint.Port(rawValue: 22)!
+            let connection = NWConnection(host: host, port: port, using: .tcp)
             
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
+            var didResume = false
+            connection.stateUpdateHandler = { state in
+                guard !didResume else { return }
+                if case .ready = state {
+                    didResume = true
+                    connection.cancel()
+                    continuation.resume(returning: true)
+                } else if case .failed = state {
+                    didResume = true
+                    connection.cancel()
+                    continuation.resume(returning: false)
+                }
+            }
             
-            do {
-                try task.run()
-                task.waitUntilExit()
-                
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                continuation.resume(returning: output.lowercased().contains("on"))
-            } catch {
+            connection.start(queue: .global())
+            
+            // Short timeout for local check
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+                guard !didResume else { return }
+                didResume = true
+                connection.cancel()
                 continuation.resume(returning: false)
             }
         }
@@ -274,7 +285,8 @@ class SharingConfigurationService: ObservableObject {
         // If enabling, also ensure the screenshare user (if exists) is authorized
         if enable && result {
             if let screenshareUser = UserDefaults.standard.string(forKey: "screenShareUsername") {
-                await authorizeUserForSSH(username: screenshareUser)
+                let authorized = await authorizeUserForSSH(username: screenshareUser)
+                print("🌊 TidalDrift: SSH authorization for '\(screenshareUser)': \(authorized ? "SUCCESS" : "FAILED")")
             }
         }
         
