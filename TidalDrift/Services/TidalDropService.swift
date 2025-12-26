@@ -54,14 +54,27 @@ class TidalDropService: ObservableObject {
             let params = NWParameters.tcp
             listener = try NWListener(using: params, on: 5902)
             
+            listener?.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    print("🌊 TidalDrop: Listener ready on port 5902")
+                case .failed(let error):
+                    print("❌ TidalDrop: Listener failed: \(error)")
+                case .cancelled:
+                    print("🌊 TidalDrop: Listener cancelled")
+                default:
+                    break
+                }
+            }
+            
             listener?.newConnectionHandler = { [weak self] connection in
+                print("🌊 TidalDrop: Incoming connection from \(connection.endpoint)")
                 self?.handleIncomingConnection(connection)
             }
             
             listener?.start(queue: queue)
-            print("🌊 TidalDrop: Listening on port 5902")
         } catch {
-            print("❌ TidalDrop: Listener failed: \(error)")
+            print("❌ TidalDrop: Failed to create listener: \(error)")
         }
     }
     
@@ -70,12 +83,33 @@ class TidalDropService: ObservableObject {
         
         // 1. Receive metadata size (4 bytes)
         connection.receive(minimumIncompleteLength: 4, maximumLength: 4) { [weak self] data, _, _, error in
-            guard let self = self, let d = data, error == nil else { return }
+            if let error = error {
+                print("❌ TidalDrop: Error receiving header size: \(error)")
+                return
+            }
+            guard let self = self, let d = data else {
+                print("❌ TidalDrop: No data received for header size")
+                return
+            }
+            
             let metadataSize = Int(d.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian })
+            print("🌊 TidalDrop: Expecting metadata of \(metadataSize) bytes")
             
             // 2. Receive metadata JSON
             connection.receive(minimumIncompleteLength: metadataSize, maximumLength: metadataSize) { [weak self] data, _, _, error in
-                guard let self = self, let d = data, let metadata = try? JSONDecoder().decode(FileMetadata.self, from: d) else { return }
+                if let error = error {
+                    print("❌ TidalDrop: Error receiving metadata: \(error)")
+                    return
+                }
+                guard let self = self, let d = data else {
+                    print("❌ TidalDrop: No metadata received")
+                    return
+                }
+                
+                guard let metadata = try? JSONDecoder().decode(FileMetadata.self, from: d) else {
+                    print("❌ TidalDrop: Failed to decode metadata")
+                    return
+                }
                 
                 self.setupIncomingTransfer(connection, metadata: metadata)
             }
@@ -83,10 +117,21 @@ class TidalDropService: ObservableObject {
     }
     
     private func setupIncomingTransfer(_ connection: NWConnection, metadata: FileMetadata) {
+        print("🌊 TidalDrop: Receiving '\(metadata.fileName)' (\(metadata.fileSize) bytes)")
+        
         let transferId = UUID()
         let destinationFolder = AppState.shared.settings.tidalDropFolder
-        try? FileManager.default.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
+        
+        // Create destination folder
+        do {
+            try FileManager.default.createDirectory(at: destinationFolder, withIntermediateDirectories: true, attributes: nil)
+            print("🌊 TidalDrop: Destination folder: \(destinationFolder.path)")
+        } catch {
+            print("❌ TidalDrop: Failed to create destination folder: \(error)")
+        }
+        
         let fileURL = destinationFolder.appendingPathComponent(metadata.fileName)
+        print("🌊 TidalDrop: Saving to: \(fileURL.path)")
         
         let transfer = DropTransfer(
             id: transferId,
@@ -144,12 +189,36 @@ class TidalDropService: ObservableObject {
     }
     
     func sendFile(at url: URL, to ipAddress: String) {
+        print("🌊 TidalDrop: Attempting to send \(url.lastPathComponent) to \(ipAddress)")
+        
+        // Start security-scoped access for sandboxed files
+        let didStartAccess = url.startAccessingSecurityScopedResource()
+        
+        defer {
+            if didStartAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        
+        // Check file exists and is readable
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            print("❌ TidalDrop: File does not exist: \(url.path)")
+            return
+        }
+        
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            print("❌ TidalDrop: File is not readable: \(url.path)")
+            return
+        }
+        
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(ipAddress), port: 5902)
         let connection = NWConnection(to: endpoint, using: .tcp)
         
         let transferId = UUID()
         let name = url.lastPathComponent
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
+        
+        print("🌊 TidalDrop: File size: \(size) bytes")
         
         let transfer = DropTransfer(
             id: transferId,
@@ -166,28 +235,46 @@ class TidalDropService: ObservableObject {
             self.notifyTransferStarted(fileName: name, isIncoming: false)
         }
         
+        // Copy file data before connection (in case security scope ends)
+        guard let fileData = try? Data(contentsOf: url) else {
+            print("❌ TidalDrop: Failed to read file data")
+            return
+        }
+        
+        print("🌊 TidalDrop: Read \(fileData.count) bytes, connecting to \(ipAddress):5902")
+        
         connection.stateUpdateHandler = { [weak self] state in
-            if case .ready = state {
-                self?.performSend(connection, transferId: transferId, url: url, name: name, size: size)
-            } else if case .failed(let error) = state {
+            switch state {
+            case .ready:
+                print("🌊 TidalDrop: Connection ready, sending...")
+                self?.performSendWithData(connection, transferId: transferId, name: name, size: size, fileData: fileData)
+            case .failed(let error):
+                print("❌ TidalDrop: Connection failed: \(error)")
                 DispatchQueue.main.async {
                     self?.activeTransfers[transferId]?.status = .failed(error.localizedDescription)
                 }
+            case .waiting(let error):
+                print("🌊 TidalDrop: Connection waiting: \(error)")
+            default:
+                break
             }
         }
         connection.start(queue: queue)
     }
     
-    private func performSend(_ connection: NWConnection, transferId: UUID, url: URL, name: String, size: Int64) {
+    private func performSendWithData(_ connection: NWConnection, transferId: UUID, name: String, size: Int64, fileData: Data) {
         DispatchQueue.main.async {
             self.activeTransfers[transferId]?.status = .transferring
         }
         
         let metadata = FileMetadata(fileName: name, fileSize: size)
-        guard let metadataData = try? JSONEncoder().encode(metadata) else { return }
+        guard let metadataData = try? JSONEncoder().encode(metadata) else {
+            print("❌ TidalDrop: Failed to encode metadata")
+            return
+        }
         
         var header = Data()
-        var metadataSize = UInt32(metadataData.count).bigEndian
+        let metadataSize = UInt32(metadataData.count).bigEndian
         header.append(Data([
             UInt8((metadataSize >> 24) & 0xFF),
             UInt8((metadataSize >> 16) & 0xFF),
@@ -196,25 +283,31 @@ class TidalDropService: ObservableObject {
         ]))
         header.append(metadataData)
         
+        print("🌊 TidalDrop: Sending header (\(header.count) bytes)")
+        
         connection.send(content: header, completion: .contentProcessed { [weak self] error in
             if let e = error {
+                print("❌ TidalDrop: Header send failed: \(e)")
                 DispatchQueue.main.async { self?.activeTransfers[transferId]?.status = .failed(e.localizedDescription) }
                 return
             }
             
-            if let fileData = try? Data(contentsOf: url) {
-                connection.send(content: fileData, completion: .contentProcessed { [weak self] error in
-                    if let e = error {
-                        DispatchQueue.main.async { self?.activeTransfers[transferId]?.status = .failed(e.localizedDescription) }
-                    } else {
-                        DispatchQueue.main.async { self?.activeTransfers[transferId]?.progress = 1.0 }
-                        self?.completeTransfer(transferId: transferId, fileName: name, isIncoming: false)
-                        connection.cancel()
-                    }
-                })
-            }
+            print("🌊 TidalDrop: Header sent, sending file data (\(fileData.count) bytes)")
+            
+            connection.send(content: fileData, completion: .contentProcessed { [weak self] error in
+                if let e = error {
+                    print("❌ TidalDrop: File send failed: \(e)")
+                    DispatchQueue.main.async { self?.activeTransfers[transferId]?.status = .failed(e.localizedDescription) }
+                } else {
+                    print("✅ TidalDrop: File sent successfully!")
+                    DispatchQueue.main.async { self?.activeTransfers[transferId]?.progress = 1.0 }
+                    self?.completeTransfer(transferId: transferId, fileName: name, isIncoming: false)
+                    connection.cancel()
+                }
+            })
         })
     }
+    
     
     private func completeTransfer(transferId: UUID, fileName: String, isIncoming: Bool) {
         DispatchQueue.main.async {
