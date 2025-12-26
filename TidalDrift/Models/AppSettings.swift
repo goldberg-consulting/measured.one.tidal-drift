@@ -18,6 +18,9 @@ struct AppSettings: Codable, Equatable {
     var wakeOnLANRetries: Int
     var autoWakeBeforeConnect: Bool
     
+    // TidalDrop settings
+    var tidalDropDestination: String
+    
     init(launchAtLogin: Bool = false,
          scanIntervalSeconds: Int = 30,
          showNotifications: Bool = true,
@@ -31,7 +34,8 @@ struct AppSettings: Codable, Equatable {
          wakeOnLANEnabled: Bool = true,
          wakeOnLANPort: Int = 9,
          wakeOnLANRetries: Int = 3,
-         autoWakeBeforeConnect: Bool = true) {
+         autoWakeBeforeConnect: Bool = true,
+         tidalDropDestination: String = "") {
         self.launchAtLogin = launchAtLogin
         self.scanIntervalSeconds = scanIntervalSeconds
         self.showNotifications = showNotifications
@@ -46,6 +50,16 @@ struct AppSettings: Codable, Equatable {
         self.wakeOnLANPort = wakeOnLANPort
         self.wakeOnLANRetries = wakeOnLANRetries
         self.autoWakeBeforeConnect = autoWakeBeforeConnect
+        self.tidalDropDestination = tidalDropDestination
+    }
+    
+    /// Returns the TidalDrop destination folder, defaulting to ~/Downloads/TidalDrift
+    var tidalDropFolder: URL {
+        if tidalDropDestination.isEmpty {
+            return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("TidalDrift")
+        }
+        return URL(fileURLWithPath: tidalDropDestination)
     }
     
     enum AppTheme: String, Codable, CaseIterable {

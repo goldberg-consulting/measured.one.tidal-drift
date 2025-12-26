@@ -84,9 +84,9 @@ class TidalDropService: ObservableObject {
     
     private func setupIncomingTransfer(_ connection: NWConnection, metadata: FileMetadata) {
         let transferId = UUID()
-        let downloadsPath = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appendingPathComponent("TidalDrift")
-        try? FileManager.default.createDirectory(at: downloadsPath, withIntermediateDirectories: true)
-        let fileURL = downloadsPath.appendingPathComponent(metadata.fileName)
+        let destinationFolder = AppState.shared.settings.tidalDropFolder
+        try? FileManager.default.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
+        let fileURL = destinationFolder.appendingPathComponent(metadata.fileName)
         
         let transfer = DropTransfer(
             id: transferId,
@@ -223,7 +223,8 @@ class TidalDropService: ObservableObject {
         
         let content = UNMutableNotificationContent()
         content.title = isIncoming ? "TidalDrop Received" : "TidalDrop Sent"
-        content.body = isIncoming ? "'\(fileName)' is in Downloads/TidalDrift" : "'\(fileName)' sent successfully"
+        let folderName = AppState.shared.settings.tidalDropFolder.lastPathComponent
+        content.body = isIncoming ? "'\(fileName)' saved to \(folderName)" : "'\(fileName)' sent successfully"
         content.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }

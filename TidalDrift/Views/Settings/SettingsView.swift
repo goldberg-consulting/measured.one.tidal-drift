@@ -151,6 +151,10 @@ struct GeneralSettingsView: View {
                     .foregroundColor(.secondary)
             }
             
+            Section("TidalDrop") {
+                TidalDropFolderPicker()
+            }
+            
             Section("Experimental") {
                 Toggle(isOn: Binding(
                     get: { AppStreamingService.shared.isExperimentalEnabled },
@@ -502,6 +506,74 @@ struct AboutView: View {
             }
         }
         .padding(40)
+    }
+}
+
+struct TidalDropFolderPicker: View {
+    @EnvironmentObject var appState: AppState
+    @State private var showFolderPicker = false
+    
+    private var currentFolder: URL {
+        appState.settings.tidalDropFolder
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "folder.fill")
+                    .foregroundColor(.accentColor)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Received Files Destination")
+                        .font(.headline)
+                    
+                    Text(currentFolder.path)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                
+                Spacer()
+                
+                Button("Choose...") {
+                    showFolderPicker = true
+                }
+                .buttonStyle(.bordered)
+            }
+            
+            Text("Files received via TidalDrop will be saved to this folder.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            HStack(spacing: 12) {
+                Button("Open Folder") {
+                    NSWorkspace.shared.open(currentFolder)
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.accentColor)
+                .font(.caption)
+                
+                if !appState.settings.tidalDropDestination.isEmpty {
+                    Button("Reset to Default") {
+                        appState.settings.tidalDropDestination = ""
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .fileImporter(
+            isPresented: $showFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                appState.settings.tidalDropDestination = url.path
+            }
+        }
     }
 }
 
