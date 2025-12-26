@@ -98,9 +98,10 @@ struct DeviceCardView: View {
             }
             
             if let url = fileURL {
-                print("🌊 TidalDrop: Sending \(url.lastPathComponent) to \(self.device.ipAddress)")
+                print("🌊 TidalDrop: Sending \(url.lastPathComponent) to \(self.device.name)")
                 DispatchQueue.main.async {
-                    TidalDropService.shared.sendFile(at: url, to: self.device.ipAddress)
+                    // Use smart send - tries mounted shares first, falls back to peer-to-peer
+                    TidalDropService.shared.smartSendFile(at: url, to: self.device)
                 }
             } else {
                 print("🌊 TidalDrop: Could not extract URL from dropped item")
