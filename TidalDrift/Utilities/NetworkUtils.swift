@@ -21,13 +21,21 @@ struct NetworkUtils {
             
             if addrFamily == UInt8(AF_INET) {
                 let name = String(cString: interface.ifa_name)
-                if name == "en0" || name == "en1" {
+                // Skip loopback
+                if name != "lo0" {
                     var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                     getnameinfo(interface.ifa_addr, socklen_t(interface.ifa_addr.pointee.sa_len),
                                &hostname, socklen_t(hostname.count),
                                nil, socklen_t(0), NI_NUMERICHOST)
-                    address = String(cString: hostname)
-                    if name == "en0" { break }
+                    let ip = String(cString: hostname)
+                    
+                    // Prefer en0 (Wi-Fi) but accept any valid local IP
+                    if name == "en0" {
+                        return ip
+                    }
+                    if address == nil {
+                        address = ip
+                    }
                 }
             }
             

@@ -581,26 +581,31 @@ class NetworkDiscoveryService: ObservableObject {
         print("🌊 TidalDrift PEER: Attempting to mark '\(hostname)' at \(peerInfo.ipAddress) as peer")
         
         DispatchQueue.main.async {
-            // Try to find matching device by hostname, name, or IP address
-            let normalizedHostname = hostname.lowercased().replacingOccurrences(of: ".local", with: "")
+            // Normalize input hostname
+            let inputHostname = hostname.lowercased().replacingOccurrences(of: ".local", with: "")
+            let inputIP = peerInfo.ipAddress
             
-            if let index = self.discoveredDevices.firstIndex(where: { device in
-                let deviceName = device.name.lowercased()
-                let deviceHostname = device.hostname.lowercased().replacingOccurrences(of: ".local", with: "")
-                let deviceIP = device.ipAddress
-                
-                let matches = deviceName == normalizedHostname ||
-                       deviceHostname == normalizedHostname ||
-                       deviceName.contains(normalizedHostname) ||
-                       normalizedHostname.contains(deviceName) ||
-                       (!peerInfo.ipAddress.isEmpty && deviceIP == peerInfo.ipAddress)
-                
-                if matches {
-                    print("🌊 TidalDrift PEER: Match found for '\(hostname)': \(device.name)")
+            // Check cache directly first
+            var matchedIP: String?
+            
+            // Match by IP
+            if !inputIP.isEmpty && self.deviceCache[inputIP] != nil {
+                matchedIP = inputIP
+            } else {
+                // Match by hostname or name in cache
+                for (ip, device) in self.deviceCache {
+                    let dName = device.name.lowercased()
+                    let dHost = device.hostname.lowercased().replacingOccurrences(of: ".local", with: "")
+                    
+                    if dName == inputHostname || dHost == inputHostname || 
+                       dName.contains(inputHostname) || inputHostname.contains(dName) {
+                        matchedIP = ip
+                        break
+                    }
                 }
-                return matches
-            }) {
-                var device = self.discoveredDevices[index]
+            }
+            
+            if let ip = matchedIP, var device = self.deviceCache[ip] {
                 device.isTidalDriftPeer = true
                 device.services.insert(.ssh)
                 device.services.insert(.tidalDrift)
@@ -612,20 +617,20 @@ class NetworkDiscoveryService: ObservableObject {
                 device.peerUserName = peerInfo.userName
                 device.peerUptimeHours = peerInfo.uptimeHours
                 
-                // Update IP if we have a resolved one
-                if !peerInfo.ipAddress.isEmpty {
-                    device.ipAddress = peerInfo.ipAddress
+                // Keep the most accurate IP
+                if !inputIP.isEmpty && inputIP != "Unknown" {
+                    device.ipAddress = inputIP
                 }
                 
                 self.deviceCache[device.ipAddress] = device
-                print("🌊 TidalDrift PEER: ✅ Updated existing device '\(device.name)' as peer")
+                print("🌊 TidalDrift PEER: ✅ Updated cache entry '\(device.name)' as peer")
             } else {
                 // Create a new device entry for this TidalDrift peer
                 let displayName = hostname.replacingOccurrences(of: ".local", with: "")
                 let newDevice = DiscoveredDevice(
                     name: displayName,
                     hostname: hostname.hasSuffix(".local") ? hostname : "\(hostname).local",
-                    ipAddress: peerInfo.ipAddress.isEmpty ? "Resolving..." : peerInfo.ipAddress,
+                    ipAddress: peerInfo.ipAddress.isEmpty || peerInfo.ipAddress == "Unknown" ? "Resolving..." : peerInfo.ipAddress,
                     services: [.screenSharing, .ssh, .tidalDrift],
                     lastSeen: Date(),
                     isTrusted: false,
