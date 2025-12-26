@@ -252,10 +252,19 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         
         // Read output asynchronously
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if !data.isEmpty, let output = String(data: data, encoding: .utf8) {
-                self?.parseBrowseOutput(output)
+            // Safely read available data (may throw if process terminated)
+            let data: Data
+            do {
+                data = handle.availableData
+            } catch {
+                return
             }
+            
+            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
+                return
+            }
+            
+            self?.parseBrowseOutput(output)
         }
         
         do {
@@ -322,6 +331,8 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     
     private var resolveProcesses: [String: Process] = [:]
     
+    private var resolvePipes: [String: Pipe] = [:]
+    
     private func resolveServiceViaDnsSd(name: String) {
         // Skip if already resolving this service
         guard resolveProcesses[name] == nil else { return }
@@ -335,18 +346,32 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         process.standardError = FileHandle.nullDevice
         
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if !data.isEmpty, let output = String(data: data, encoding: .utf8) {
-                self?.parseResolveOutput(output, name: name)
+            // Safely read available data
+            let data: Data
+            do {
+                data = handle.availableData
+            } catch {
+                return
             }
+            
+            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
+                return
+            }
+            
+            self?.parseResolveOutput(output, name: name)
         }
         
         do {
             try process.run()
             resolveProcesses[name] = process
+            resolvePipes[name] = pipe
             
             // Kill resolve process after 5 seconds
             DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak self] in
+                // Remove handler before terminating
+                self?.resolvePipes[name]?.fileHandleForReading.readabilityHandler = nil
+                self?.resolvePipes[name] = nil
+                
                 if let p = self?.resolveProcesses[name], p.isRunning {
                     p.terminate()
                 }
@@ -409,19 +434,57 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         
+        // Track if we've found a result to avoid processing after termination
+        var foundResult = false
+        let lock = NSLock()
+        
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            if !data.isEmpty, let output = String(data: data, encoding: .utf8) {
-                // Parse IP from output
-                let lines = output.components(separatedBy: "\n")
-                for line in lines {
-                    // Look for IPv4 address pattern
-                    if let match = line.range(of: "\\d+\\.\\d+\\.\\d+\\.\\d+", options: .regularExpression) {
-                        let ip = String(line[match])
+            // Thread-safe check and set
+            lock.lock()
+            if foundResult {
+                lock.unlock()
+                return
+            }
+            
+            // Check if data is available (empty data means EOF/closed)
+            let data: Data
+            do {
+                data = handle.availableData
+            } catch {
+                lock.unlock()
+                return
+            }
+            
+            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
+                lock.unlock()
+                return
+            }
+            lock.unlock()
+            
+            // Parse IP from output
+            let lines = output.components(separatedBy: "\n")
+            for line in lines {
+                // Look for IPv4 address pattern
+                if let match = line.range(of: "\\d+\\.\\d+\\.\\d+\\.\\d+", options: .regularExpression) {
+                    let ip = String(line[match])
+                    
+                    lock.lock()
+                    if !foundResult {
+                        foundResult = true
+                        lock.unlock()
+                        
+                        // Remove handler BEFORE terminating to prevent crash
+                        pipe.fileHandleForReading.readabilityHandler = nil
+                        
                         self?.addDiscoveredPeer(name: name, ip: ip)
-                        process.terminate()
-                        break
+                        
+                        if process.isRunning {
+                            process.terminate()
+                        }
+                    } else {
+                        lock.unlock()
                     }
+                    return
                 }
             }
         }
@@ -431,6 +494,15 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             
             // Kill lookup process after 3 seconds
             DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+                lock.lock()
+                let alreadyFound = foundResult
+                lock.unlock()
+                
+                if !alreadyFound {
+                    // Remove handler before terminating
+                    pipe.fileHandleForReading.readabilityHandler = nil
+                }
+                
                 if process.isRunning {
                     process.terminate()
                 }
