@@ -223,11 +223,24 @@ class ScreenShareConnectionService {
     
     func connectToSSH(device: DiscoveredDevice, username: String? = nil) {
         let user = username ?? NSUserName()
-        let script = "tell application \"Terminal\" to do script \"ssh \(user)@\(device.ipAddress)\" activate"
+        let host = device.ipAddress
+        
+        // Proper AppleScript to open Terminal and run SSH
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "ssh \(user)@\(host)"
+        end tell
+        """
         
         var error: NSDictionary?
         if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(&error)
+            let result = appleScript.executeAndReturnError(&error)
+            if let error = error {
+                print("❌ SSH AppleScript error: \(error)")
+            } else {
+                print("✅ SSH Terminal opened for \(user)@\(host)")
+            }
         }
     }
     
