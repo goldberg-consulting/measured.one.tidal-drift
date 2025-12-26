@@ -7,7 +7,7 @@ set -e
 
 APP_NAME="TidalDrift"
 BUNDLE_ID="com.goldbergconsulting.tidaldrift"
-VERSION="1.1.2"
+VERSION="1.1.8"
 
 # Colors for output
 GREEN='\033[0;32m'
