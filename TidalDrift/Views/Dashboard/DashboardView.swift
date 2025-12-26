@@ -35,6 +35,7 @@ struct DashboardView: View {
         .onReceive(NotificationCenter.default.publisher(for: .addDeviceManually)) { _ in
             viewModel.showAddDeviceSheet = true
         }
+        .environmentObject(viewModel)
     }
     
     @ViewBuilder

@@ -206,6 +206,9 @@ struct NetworkSettingsView: View {
                 Toggle("Enable Peer Discovery", isOn: $appState.settings.peerDiscoveryEnabled)
                     .help("Allows other TidalDrift instances to find this Mac and vice versa.")
                 
+                Toggle("Enable SSH Discovery", isOn: $appState.settings.sshDiscoveryEnabled)
+                    .help("Actively scan the network for devices with SSH enabled.")
+                
                 Picker("Scan interval", selection: $appState.settings.scanIntervalSeconds) {
                     ForEach(AppSettings.scanIntervalOptions, id: \.self) { interval in
                         Text(AppSettings.scanIntervalDisplayName(for: interval)).tag(interval)
@@ -379,7 +382,7 @@ struct AboutView: View {
         VStack(spacing: 24) {
             TidalDriftLogo(size: .medium)
             
-                    Text("Version 1.1.2")
+            Text("Version 1.1.8")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             

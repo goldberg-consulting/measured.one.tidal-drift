@@ -735,7 +735,10 @@ class NetworkDiscoveryService: ObservableObject {
                         async let screenShare = self.scanIP(ip, port: 5900)
                         async let fileShare = self.scanIP(ip, port: 445)
                         async let afp = self.scanIP(ip, port: 548)
-                        async let ssh = self.scanIP(ip, port: 22)
+                        
+                        // Only scan for SSH if enabled in settings
+                        let shouldScanSSH = await MainActor.run { AppState.shared.settings.sshDiscoveryEnabled }
+                        async let ssh = shouldScanSSH ? self.scanIP(ip, port: 22) : false
                         
                         return ScanResult(
                             ip: ip,
@@ -809,11 +812,13 @@ class NetworkDiscoveryService: ObservableObject {
             }
         }
 
-        // Check SSH
-        if await scanIP(ipAddress, port: 22) {
-            let name = getHostname(for: ipAddress) ?? "Mac at \(ipAddress)"
-            await MainActor.run {
-                addOrUpdateDevice(name: name, ipAddress: ipAddress, port: 22, service: .ssh)
+        // Check SSH (only if enabled)
+        if AppState.shared.settings.sshDiscoveryEnabled {
+            if await scanIP(ipAddress, port: 22) {
+                let name = getHostname(for: ipAddress) ?? "Mac at \(ipAddress)"
+                await MainActor.run {
+                    addOrUpdateDevice(name: name, ipAddress: ipAddress, port: 22, service: .ssh)
+                }
             }
         }
     }

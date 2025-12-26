@@ -49,6 +49,16 @@ struct StatusCardView: View {
                         .scaleEffect(0.7)
                         .frame(width: 40)
                 }
+                
+                HStack {
+                    Text("SSH Discovery")
+                        .font(.caption)
+                    Spacer()
+                    Toggle("", isOn: $appState.settings.sshDiscoveryEnabled)
+                        .toggleStyle(.switch)
+                        .scaleEffect(0.7)
+                        .frame(width: 40)
+                }
             }
             
             Divider()
@@ -100,7 +110,7 @@ struct StatusCardView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("1.1.2")
+                Text("1.1.8")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
