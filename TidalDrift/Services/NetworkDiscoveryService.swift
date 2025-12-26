@@ -25,6 +25,8 @@ class NetworkDiscoveryService: ObservableObject {
         "_smb._tcp",           // Windows/Samba File Sharing
         "_afpovertcp._tcp",    // AFP (Apple Filing Protocol)
         "_ssh._tcp",           // SSH
+        "_tidaldrift._tcp",    // TidalDrift
+        "_tidaldrop._tcp",     // TidalDrop
         "_net-assistant._udp", // Apple Remote Desktop
         "_eppc._tcp",          // Remote Apple Events
         "_device-info._tcp",   // Device Info
@@ -596,6 +598,8 @@ class NetworkDiscoveryService: ObservableObject {
             }) {
                 var device = self.discoveredDevices[index]
                 device.isTidalDriftPeer = true
+                device.services.insert(.ssh)
+                device.services.insert(.tidalDrift)
                 device.peerModelName = peerInfo.modelName
                 device.peerModelIdentifier = peerInfo.modelIdentifier
                 device.peerProcessorInfo = peerInfo.processorInfo
@@ -618,7 +622,7 @@ class NetworkDiscoveryService: ObservableObject {
                     name: displayName,
                     hostname: hostname.hasSuffix(".local") ? hostname : "\(hostname).local",
                     ipAddress: peerInfo.ipAddress.isEmpty ? "Resolving..." : peerInfo.ipAddress,
-                    services: [.screenSharing],
+                    services: [.screenSharing, .ssh, .tidalDrift],
                     lastSeen: Date(),
                     isTrusted: false,
                     isTidalDriftPeer: true,
