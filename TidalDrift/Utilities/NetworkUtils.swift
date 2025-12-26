@@ -2,6 +2,20 @@ import Foundation
 import Network
 import SystemConfiguration
 
+/// Thread-safe flag for use in concurrent contexts (Swift 6 compatible)
+final class AtomicFlag: @unchecked Sendable {
+    private var _value: Bool
+    
+    init(_ initialValue: Bool = false) {
+        _value = initialValue
+    }
+    
+    var value: Bool {
+        get { _value }
+        set { _value = newValue }
+    }
+}
+
 struct NetworkUtils {
     
     // MARK: - Cached Computer Name (avoids slow DNS lookup on every call)

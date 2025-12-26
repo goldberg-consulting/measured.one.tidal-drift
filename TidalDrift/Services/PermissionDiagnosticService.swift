@@ -372,26 +372,7 @@ class PermissionDiagnosticService: ObservableObject {
     
     /// Kickstart the Screen Sharing service
     func kickstartScreenSharing() async -> Bool {
-        // First try to enable via System Preferences automation
-        let script = """
-        tell application "System Preferences"
-            activate
-            set current pane to pane "com.apple.preference.sharing"
-        end tell
-        
-        delay 1
-        
-        tell application "System Events"
-            tell process "System Preferences"
-                -- Click on Screen Sharing checkbox if it exists
-                try
-                    click checkbox 1 of row 1 of table 1 of scroll area 1 of group 1 of window 1
-                end try
-            end tell
-        end tell
-        """
-        
-        // For now, just restart the launchd service
+        // Restart the launchd service
         let result = ShellExecutor.execute("""
             sudo launchctl kickstart -k system/com.apple.screensharing 2>&1 || \
             sudo launchctl enable system/com.apple.screensharing 2>&1

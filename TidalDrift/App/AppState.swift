@@ -38,8 +38,8 @@ class AppState: ObservableObject {
         
         $settings
             .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
-            .sink { [weak self] settings in
-                SettingsService.shared.saveSettings(settings)
+            .sink { _ in
+                SettingsService.shared.saveSettings(AppState.shared.settings)
             }
             .store(in: &cancellables)
     }

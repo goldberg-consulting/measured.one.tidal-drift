@@ -267,18 +267,18 @@ class ScreenShareConnectionService {
             let port = NWEndpoint.Port(rawValue: UInt16(port))!
             let connection = NWConnection(host: host, port: port, using: .tcp)
             
-            var didResume = false
+            let didResume = AtomicFlag()
             
             connection.stateUpdateHandler = { state in
-                guard !didResume else { return }
+                guard !didResume.value else { return }
                 
                 switch state {
                 case .ready:
-                    didResume = true
+                    didResume.value = true
                     connection.cancel()
                     continuation.resume(returning: true)
                 case .failed, .cancelled:
-                    didResume = true
+                    didResume.value = true
                     continuation.resume(returning: false)
                 default:
                     break
@@ -288,8 +288,8 @@ class ScreenShareConnectionService {
             connection.start(queue: .global())
             
             DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
-                guard !didResume else { return }
-                didResume = true
+                guard !didResume.value else { return }
+                didResume.value = true
                 connection.cancel()
                 continuation.resume(returning: false)
             }
@@ -369,10 +369,10 @@ class ScreenShareConnectionService {
             let portEndpoint = NWEndpoint.Port(rawValue: port)!
             let connection = NWConnection(host: host, port: portEndpoint, using: .tcp)
             
-            var didResume = false
+            let didResume = AtomicFlag()
             
             connection.stateUpdateHandler = { state in
-                guard !didResume else { return }
+                guard !didResume.value else { return }
                 
                 switch state {
                 case .ready:
@@ -381,8 +381,8 @@ class ScreenShareConnectionService {
                     let data = Data(command.utf8)
                     
                     connection.send(content: data, completion: .contentProcessed { error in
-                        guard !didResume else { return }
-                        didResume = true
+                        guard !didResume.value else { return }
+                        didResume.value = true
                         connection.cancel()
                         
                         if error == nil {
@@ -393,7 +393,7 @@ class ScreenShareConnectionService {
                     })
                     
                 case .failed, .cancelled:
-                    didResume = true
+                    didResume.value = true
                     continuation.resume(returning: false)
                     
                 default:
@@ -405,8 +405,8 @@ class ScreenShareConnectionService {
             
             // Timeout
             DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
-                guard !didResume else { return }
-                didResume = true
+                guard !didResume.value else { return }
+                didResume.value = true
                 connection.cancel()
                 continuation.resume(returning: false)
             }

@@ -24,8 +24,8 @@ fi
 
 echo -e "${BLUE}🌊 Building TidalDrift...${NC}"
 
-# Build release version
-swift build -c release
+# Build release version (single-threaded to avoid compiler race conditions)
+swift build -c release -j 1
 
 echo -e "${BLUE}📦 Creating app bundle...${NC}"
 

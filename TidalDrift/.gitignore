@@ -1,0 +1,31 @@
+# Build artifacts
+.build/
+TidalDrift.app/
+*.dmg
+DerivedData/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# SwiftPM
+.swiftpm/
+
+# macOS
+.DS_Store
+*.dSYM/
+
+# Logs
+*.log
+
+# Signing (keep these private)
+# *.p12
+# *.cer
+
+# Temporary files
+*.tmp
+*.temp
+

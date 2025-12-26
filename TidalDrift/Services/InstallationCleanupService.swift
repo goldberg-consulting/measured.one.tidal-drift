@@ -44,12 +44,6 @@ class InstallationCleanupService {
             }
         }
         
-        // Also check for running instances
-        let runningApps = NSWorkspace.shared.runningApplications.filter {
-            $0.bundleIdentifier?.contains("tidaldrift") == true ||
-            $0.localizedName?.contains("TidalDrift") == true
-        }
-        
         // Sort by name
         return installations.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }

@@ -56,15 +56,15 @@ class SharingConfigurationService: ObservableObject {
             let port = NWEndpoint.Port(rawValue: 5900)!
             let connection = NWConnection(host: host, port: port, using: .tcp)
             
-            var didResume = false
+            let didResume = AtomicFlag()
             connection.stateUpdateHandler = { state in
-                guard !didResume else { return }
+                guard !didResume.value else { return }
                 if case .ready = state {
-                    didResume = true
+                    didResume.value = true
                     connection.cancel()
                     continuation.resume(returning: true)
                 } else if case .failed = state {
-                    didResume = true
+                    didResume.value = true
                     connection.cancel()
                     continuation.resume(returning: false)
                 }
@@ -74,8 +74,8 @@ class SharingConfigurationService: ObservableObject {
             
             // 0.3 second timeout for localhost
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
-                guard !didResume else { return }
-                didResume = true
+                guard !didResume.value else { return }
+                didResume.value = true
                 connection.cancel()
                 continuation.resume(returning: false)
             }
@@ -112,15 +112,15 @@ class SharingConfigurationService: ObservableObject {
             let port = NWEndpoint.Port(rawValue: 445)!
             let connection = NWConnection(host: host, port: port, using: .tcp)
             
-            var didResume = false
+            let didResume = AtomicFlag()
             connection.stateUpdateHandler = { state in
-                guard !didResume else { return }
+                guard !didResume.value else { return }
                 if case .ready = state {
-                    didResume = true
+                    didResume.value = true
                     connection.cancel()
                     continuation.resume(returning: true)
                 } else if case .failed = state {
-                    didResume = true
+                    didResume.value = true
                     connection.cancel()
                     continuation.resume(returning: false)
                 }
@@ -130,8 +130,8 @@ class SharingConfigurationService: ObservableObject {
             
             // 0.3 second timeout for localhost
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
-                guard !didResume else { return }
-                didResume = true
+                guard !didResume.value else { return }
+                didResume.value = true
                 connection.cancel()
                 continuation.resume(returning: false)
             }
@@ -147,17 +147,17 @@ class SharingConfigurationService: ObservableObject {
             let port = NWEndpoint.Port(rawValue: 22)!
             let connection = NWConnection(host: host, port: port, using: .tcp)
             
-            var didResume = false
+            let didResume = AtomicFlag()
             connection.stateUpdateHandler = { state in
-                guard !didResume else { return }
+                guard !didResume.value else { return }
                 if case .ready = state {
                     logger.info("Port 22 check: OPEN (connection ready)")
-                    didResume = true
+                    didResume.value = true
                     connection.cancel()
                     continuation.resume(returning: true)
                 } else if case .failed(let error) = state {
                     logger.info("Port 22 check: CLOSED (failed: \(error))")
-                    didResume = true
+                    didResume.value = true
                     connection.cancel()
                     continuation.resume(returning: false)
                 }
@@ -167,9 +167,9 @@ class SharingConfigurationService: ObservableObject {
             
             // 0.5 second timeout for local check - should be fast for localhost
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
-                guard !didResume else { return }
+                guard !didResume.value else { return }
                 logger.info("Port 22 check: TIMEOUT")
-                didResume = true
+                didResume.value = true
                 connection.cancel()
                 continuation.resume(returning: false)
             }

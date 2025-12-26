@@ -689,18 +689,18 @@ class NetworkDiscoveryService: ObservableObject {
             let port = NWEndpoint.Port(rawValue: UInt16(port))!
             let connection = NWConnection(host: host, port: port, using: .tcp)
             
-            var didResume = false
+            let didResume = AtomicFlag()
             
             connection.stateUpdateHandler = { state in
-                guard !didResume else { return }
+                guard !didResume.value else { return }
                 
                 switch state {
                 case .ready:
-                    didResume = true
+                    didResume.value = true
                     connection.cancel()
                     continuation.resume(returning: true)
                 case .failed, .cancelled:
-                    didResume = true
+                    didResume.value = true
                     continuation.resume(returning: false)
                 default:
                     break
@@ -711,8 +711,8 @@ class NetworkDiscoveryService: ObservableObject {
             
             // 2 second timeout per IP
             DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                guard !didResume else { return }
-                didResume = true
+                guard !didResume.value else { return }
+                didResume.value = true
                 connection.cancel()
                 continuation.resume(returning: false)
             }
@@ -742,7 +742,12 @@ class NetworkDiscoveryService: ObservableObject {
         hostsToScan.sort { abs($0 - currentHost) < abs($1 - currentHost) }
         
         let totalIPs = hostsToScan.count
-        var scanned = 0
+        
+        // Use class-based counter for Swift 6 concurrency safety
+        final class Counter: @unchecked Sendable {
+            var value: Int = 0
+        }
+        let scanned = Counter()
         
         // Structure to hold scan results for an IP
         struct ScanResult: Sendable {
@@ -783,9 +788,9 @@ class NetworkDiscoveryService: ObservableObject {
                 }
                 
                 for await result in group {
-                    scanned += 1
+                    scanned.value += 1
                     await MainActor.run {
-                        scanProgress = Double(scanned) / Double(totalIPs)
+                        scanProgress = Double(scanned.value) / Double(totalIPs)
                     }
                     
                     let hasAnyService = result.hasScreenSharing || result.hasFileSharing || result.hasAFP || result.hasSSH
