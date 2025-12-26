@@ -50,36 +50,33 @@ class SharingConfigurationService: ObservableObject {
         
         if method1 { return true }
         
-        // Method 2: Check via system_profiler
+        // Method 2: Fast port check using NWConnection (much faster than system_profiler/lsof)
         return await withCheckedContinuation { continuation in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
-            task.arguments = ["SPConfigurationProfileDataType", "-json"]
+            let host = NWEndpoint.Host("127.0.0.1")
+            let port = NWEndpoint.Port(rawValue: 5900)!
+            let connection = NWConnection(host: host, port: port, using: .tcp)
             
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = Pipe()
+            var didResume = false
+            connection.stateUpdateHandler = { state in
+                guard !didResume else { return }
+                if case .ready = state {
+                    didResume = true
+                    connection.cancel()
+                    continuation.resume(returning: true)
+                } else if case .failed = state {
+                    didResume = true
+                    connection.cancel()
+                    continuation.resume(returning: false)
+                }
+            }
             
-            do {
-                try task.run()
-                task.waitUntilExit()
-                
-                // Also check if the VNC port is listening
-                let netstatTask = Process()
-                netstatTask.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-                netstatTask.arguments = ["-i", ":5900", "-sTCP:LISTEN"]
-                
-                let netstatPipe = Pipe()
-                netstatTask.standardOutput = netstatPipe
-                netstatTask.standardError = Pipe()
-                
-                try netstatTask.run()
-                netstatTask.waitUntilExit()
-                
-                let data = netstatPipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                continuation.resume(returning: !output.isEmpty)
-            } catch {
+            connection.start(queue: .global())
+            
+            // 0.3 second timeout for localhost
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+                guard !didResume else { return }
+                didResume = true
+                connection.cancel()
                 continuation.resume(returning: false)
             }
         }
@@ -109,24 +106,33 @@ class SharingConfigurationService: ObservableObject {
         
         if method1 { return true }
         
-        // Method 2: Check if SMB port 445 is listening
+        // Method 2: Fast port check using NWConnection (much faster than lsof)
         return await withCheckedContinuation { continuation in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-            task.arguments = ["-i", ":445", "-sTCP:LISTEN"]
+            let host = NWEndpoint.Host("127.0.0.1")
+            let port = NWEndpoint.Port(rawValue: 445)!
+            let connection = NWConnection(host: host, port: port, using: .tcp)
             
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = Pipe()
+            var didResume = false
+            connection.stateUpdateHandler = { state in
+                guard !didResume else { return }
+                if case .ready = state {
+                    didResume = true
+                    connection.cancel()
+                    continuation.resume(returning: true)
+                } else if case .failed = state {
+                    didResume = true
+                    connection.cancel()
+                    continuation.resume(returning: false)
+                }
+            }
             
-            do {
-                try task.run()
-                task.waitUntilExit()
-                
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                continuation.resume(returning: !output.isEmpty)
-            } catch {
+            connection.start(queue: .global())
+            
+            // 0.3 second timeout for localhost
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+                guard !didResume else { return }
+                didResume = true
+                connection.cancel()
                 continuation.resume(returning: false)
             }
         }
@@ -159,8 +165,8 @@ class SharingConfigurationService: ObservableObject {
             
             connection.start(queue: .global())
             
-            // 2.0 second timeout for local check (SSH can be slow to start)
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+            // 0.5 second timeout for local check - should be fast for localhost
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
                 guard !didResume else { return }
                 logger.info("Port 22 check: TIMEOUT")
                 didResume = true

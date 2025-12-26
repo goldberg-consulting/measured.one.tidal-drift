@@ -236,9 +236,26 @@ class NetworkDiscoveryService: ObservableObject {
     
     func refreshScan() {
         stopBrowsing()
+        
+        // Preserve TidalDrift peer info before clearing cache
+        let tidalDriftPeers = deviceCache.filter { $0.value.isTidalDriftPeer }
+        
         deviceCache.removeAll()
+        
+        // Restore TidalDrift peer entries (they'll be updated when rediscovered)
+        for (key, device) in tidalDriftPeers {
+            deviceCache[key] = device
+        }
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.startBrowsing()
+            
+            // Also trigger TidalDrift peer re-discovery
+            if AppState.shared.settings.peerDiscoveryEnabled {
+                // Restart peer discovery to re-sync
+                TidalDriftPeerService.shared.stopDiscovery()
+                TidalDriftPeerService.shared.startDiscovery()
+            }
         }
     }
     

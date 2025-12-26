@@ -445,47 +445,42 @@ struct SharingUserSetupView: View {
     }
     
     private func fetchSystemUsers() async -> [SystemUser] {
-        // Get list of users using dscl
-        let result = ShellExecutor.execute("dscl . -list /Users")
-        let allUsers = result.output.split(separator: "\n").map(String.init)
+        // Get list of users using a single optimized command
+        // This gets all user info in one shot instead of multiple calls per user
+        let result = ShellExecutor.execute("""
+            dscl . -list /Users | while read user; do
+                [[ "$user" == _* ]] && continue
+                [[ "$user" == "root" || "$user" == "daemon" || "$user" == "nobody" || "$user" == "Guest" ]] && continue
+                home=$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | grep "/Users/" || true)
+                [[ -z "$home" ]] && continue
+                name=$(dscl . -read "/Users/$user" RealName 2>/dev/null | tail -1 | sed 's/^ *//')
+                [[ -z "$name" || "$name" == "RealName:" ]] && name="$user"
+                admin=$(dsmemberutil checkmembership -U "$user" -G admin 2>/dev/null | grep -c "is a member" || echo 0)
+                echo "$user|$name|$admin"
+            done
+            """)
         
         var systemUsers: [SystemUser] = []
         
-        for username in allUsers {
-            // Skip system accounts (those starting with _ or root, daemon, nobody, etc.)
-            if username.hasPrefix("_") || 
-               ["root", "daemon", "nobody", "Guest"].contains(username) {
-                continue
-            }
+        let lines = result.output.split(separator: "\n")
+        for line in lines {
+            let parts = String(line).split(separator: "|", maxSplits: 2).map(String.init)
+            guard parts.count >= 3 else { continue }
             
-            // Sanitize username from dscl output to prevent any injection
-            // macOS usernames should only contain alphanumeric, underscore, hyphen
+            let username = parts[0]
+            let fullName = parts[1]
+            let isAdmin = parts[2] == "1"
+            
+            // Sanitize username
             let safeUsername = username.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
-            guard !safeUsername.isEmpty, safeUsername == username else {
-                continue // Skip invalid usernames
-            }
+            guard !safeUsername.isEmpty, safeUsername == username else { continue }
             
-            // Get real name
-            let realNameResult = ShellExecutor.execute("dscl . -read '/Users/\(safeUsername)' RealName 2>/dev/null | tail -1")
-            var fullName = realNameResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if fullName.isEmpty || fullName.contains("RealName:") {
-                fullName = safeUsername
-            }
-            
-            // Check if admin
-            let adminResult = ShellExecutor.execute("dsmemberutil checkmembership -U '\(safeUsername)' -G admin 2>/dev/null")
-            let isAdmin = adminResult.output.contains("is a member")
-            
-            // Only include users with a valid home directory (real users)
-            let homeResult = ShellExecutor.execute("dscl . -read '/Users/\(safeUsername)' NFSHomeDirectory 2>/dev/null")
-            if homeResult.output.contains("/Users/") {
-                systemUsers.append(SystemUser(
-                    id: safeUsername,
-                    username: safeUsername,
-                    fullName: fullName,
-                    isAdmin: isAdmin
-                ))
-            }
+            systemUsers.append(SystemUser(
+                id: safeUsername,
+                username: safeUsername,
+                fullName: fullName.isEmpty ? safeUsername : fullName,
+                isAdmin: isAdmin
+            ))
         }
         
         // Sort: non-admin first, then by name
