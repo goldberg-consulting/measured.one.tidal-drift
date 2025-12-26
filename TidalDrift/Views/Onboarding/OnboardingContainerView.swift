@@ -25,7 +25,7 @@ struct OnboardingContainerView: View {
             }
             .padding(.horizontal, 50)
         }
-        .frame(minWidth: 700, minHeight: 620)
+        .frame(minWidth: 700, minHeight: 500)
     }
     
     private var backgroundGradient: some View {

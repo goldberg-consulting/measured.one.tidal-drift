@@ -130,8 +130,8 @@ class SharingConfigurationService: ObservableObject {
     }
     
     func isRemoteLoginEnabled() async -> Bool {
-        // Try to check by testing the local port 22
-        return await withCheckedContinuation { continuation in
+        // Method 1: Check by testing local port 22
+        let portCheck = await withCheckedContinuation { continuation in
             let host = NWEndpoint.Host("127.0.0.1")
             let port = NWEndpoint.Port(rawValue: 22)!
             let connection = NWConnection(host: host, port: port, using: .tcp)
@@ -152,11 +152,33 @@ class SharingConfigurationService: ObservableObject {
             
             connection.start(queue: .global())
             
-            // Short timeout for local check
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+            // 2.0 second timeout for local check (SSH can be slow to start)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
                 guard !didResume else { return }
                 didResume = true
                 connection.cancel()
+                continuation.resume(returning: false)
+            }
+        }
+        
+        if portCheck { return true }
+        
+        // Method 2: Check via launchctl list as fallback
+        return await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            task.arguments = ["list"]
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                continuation.resume(returning: output.contains("com.openssh.sshd"))
+            } catch {
                 continuation.resume(returning: false)
             }
         }
@@ -269,25 +291,33 @@ class SharingConfigurationService: ObservableObject {
     }
     
     func toggleRemoteLogin(enable: Bool) async -> Bool {
+        let screenshareUser = UserDefaults.standard.string(forKey: "screenShareUsername")
         let script: String
+        
         if enable {
-            script = """
-            do shell script "systemsetup -setremotelogin on" with administrator privileges
-            """
+            if let user = screenshareUser {
+                // Combine enabling SSH and adding the user to the access group in one privileged command
+                script = """
+                do shell script "systemsetup -setremotelogin on && dseditgroup -o edit -a \(user) -t user com.apple.access_ssh" with administrator privileges
+                """
+            } else {
+                script = """
+                do shell script "systemsetup -setremotelogin on" with administrator privileges
+                """
+            }
         } else {
             script = """
             do shell script "systemsetup -setremotelogin off" with administrator privileges
             """
         }
         
+        print("🌊 TidalDrift: Executing Remote Login configuration script...")
         let result = await runAppleScript(script)
         
-        // If enabling, also ensure the screenshare user (if exists) is authorized
-        if enable && result {
-            if let screenshareUser = UserDefaults.standard.string(forKey: "screenShareUsername") {
-                let authorized = await authorizeUserForSSH(username: screenshareUser)
-                print("🌊 TidalDrift: SSH authorization for '\(screenshareUser)': \(authorized ? "SUCCESS" : "FAILED")")
-            }
+        if result {
+            print("🌊 TidalDrift: Remote Login configuration SUCCESS")
+        } else {
+            print("🌊 TidalDrift: Remote Login configuration FAILED or CANCELLED")
         }
         
         await refreshStatus()
@@ -295,7 +325,8 @@ class SharingConfigurationService: ObservableObject {
     }
     
     func authorizeUserForSSH(username: String) async -> Bool {
-        // macOS uses the 'com.apple.access_ssh' group to control SSH access
+        // This is now mostly handled by the combined script in toggleRemoteLogin,
+        // but keeping it as a standalone utility if needed.
         let script = """
         do shell script "dseditgroup -o edit -a \(username) -t user com.apple.access_ssh" with administrator privileges
         """
@@ -304,18 +335,23 @@ class SharingConfigurationService: ObservableObject {
     
     private func runAppleScript(_ source: String) async -> Bool {
         return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                var error: NSDictionary?
-                if let script = NSAppleScript(source: source) {
-                    script.executeAndReturnError(&error)
-                    if error == nil {
-                        continuation.resume(returning: true)
-                    } else {
-                        continuation.resume(returning: false)
-                    }
-                } else {
-                    continuation.resume(returning: false)
-                }
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            task.arguments = ["-e", source]
+            
+            // Redirect output to avoid potential hangs on pipe buffers
+            task.standardOutput = Pipe()
+            task.standardError = Pipe()
+            
+            do {
+                try task.run()
+                // Use a non-blocking wait with a timeout to avoid beachballing the whole app
+                // although since we are in an async function this is mostly just safety
+                task.waitUntilExit()
+                continuation.resume(returning: task.terminationStatus == 0)
+            } catch {
+                print("❌ Failed to run osascript: \(error)")
+                continuation.resume(returning: false)
             }
         }
     }
