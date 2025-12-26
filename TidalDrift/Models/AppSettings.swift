@@ -10,6 +10,7 @@ struct AppSettings: Codable, Equatable {
     var autoConnectTrustedDevices: Bool
     var peerDiscoveryEnabled: Bool
     var sshDiscoveryEnabled: Bool
+    var showExperimentalFeatures: Bool
     var theme: AppTheme
     
     // Wake-on-LAN settings
@@ -30,6 +31,7 @@ struct AppSettings: Codable, Equatable {
          autoConnectTrustedDevices: Bool = false,
          peerDiscoveryEnabled: Bool = true,
          sshDiscoveryEnabled: Bool = true,
+         showExperimentalFeatures: Bool = false,
          theme: AppTheme = .system,
          wakeOnLANEnabled: Bool = true,
          wakeOnLANPort: Int = 9,
@@ -45,6 +47,7 @@ struct AppSettings: Codable, Equatable {
         self.autoConnectTrustedDevices = autoConnectTrustedDevices
         self.peerDiscoveryEnabled = peerDiscoveryEnabled
         self.sshDiscoveryEnabled = sshDiscoveryEnabled
+        self.showExperimentalFeatures = showExperimentalFeatures
         self.theme = theme
         self.wakeOnLANEnabled = wakeOnLANEnabled
         self.wakeOnLANPort = wakeOnLANPort

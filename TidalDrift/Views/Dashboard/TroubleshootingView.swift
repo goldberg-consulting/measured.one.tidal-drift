@@ -9,6 +9,8 @@ struct TroubleshootingView: View {
             VStack(alignment: .leading, spacing: 24) {
                 headerSection
                 
+                driftVsNormalSection
+                
                 manualSettingsSection
                 
                 quickFixSection
@@ -51,6 +53,88 @@ struct TroubleshootingView: View {
                         .font(.headline)
                         .foregroundColor(.secondary)
                 }
+            }
+        }
+    }
+    
+    private var driftVsNormalSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Drift Mode vs Standard Mode")
+                .font(.title2)
+                .fontWeight(.semibold)
+            
+            Text("TidalDrift works in two modes. You get 98% of features without \"drifting,\" but peer discovery simplifies setup between Macs.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            
+            HStack(alignment: .top, spacing: 16) {
+                // Standard Mode
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "desktopcomputer")
+                            .font(.title2)
+                            .foregroundColor(.blue)
+                        Text("Standard Mode")
+                            .font(.headline)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 6) {
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "Screen Sharing (VNC)", available: true)
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "File Sharing (SMB/AFP)", available: true)
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "SSH/Remote Login", available: true)
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "Wake-on-LAN", available: true)
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "Network Scanning", available: true)
+                        FeatureCheckRow(icon: "xmark.circle", text: "Auto peer detection", available: false)
+                        FeatureCheckRow(icon: "xmark.circle", text: "TidalDrop file transfers", available: false)
+                        FeatureCheckRow(icon: "xmark.circle", text: "Clipboard sync", available: false)
+                    }
+                    .font(.caption)
+                    
+                    Text("Works with any Mac on your network, even without TidalDrift installed.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.blue.opacity(0.1)))
+                
+                // Drift Mode
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "wave.3.right")
+                            .font(.title2)
+                            .foregroundColor(.tidalDriftPeer)
+                        Text("Drift Mode")
+                            .font(.headline)
+                        
+                        Text("Recommended")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.tidalDriftPeer))
+                            .foregroundColor(.white)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 6) {
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "All Standard features", available: true)
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "Auto peer detection", available: true)
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "TidalDrop (drag & drop files)", available: true)
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "Clipboard sync (β)", available: true)
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "Hardware info display", available: true)
+                        FeatureCheckRow(icon: "checkmark.circle.fill", text: "One-click setup", available: true)
+                    }
+                    .font(.caption)
+                    
+                    Text("Requires TidalDrift running on both Macs with Peer Discovery enabled.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.tidalDriftPeer.opacity(0.1)))
             }
         }
     }
@@ -352,6 +436,21 @@ struct SettingsButton: View {
             .frame(width: 80, height: 60)
         }
         .buttonStyle(.bordered)
+    }
+}
+
+struct FeatureCheckRow: View {
+    let icon: String
+    let text: String
+    let available: Bool
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .foregroundColor(available ? .green : .secondary.opacity(0.5))
+            Text(text)
+                .foregroundColor(available ? .primary : .secondary.opacity(0.7))
+        }
     }
 }
 

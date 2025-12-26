@@ -155,22 +155,42 @@ struct GeneralSettingsView: View {
                 TidalDropFolderPicker()
             }
             
-            Section("Experimental") {
-                Toggle(isOn: Binding(
-                    get: { AppStreamingService.shared.isExperimentalEnabled },
-                    set: { AppStreamingService.shared.setExperimentalEnabled($0) }
-                )) {
+            Section("Experimental Features") {
+                Toggle(isOn: $appState.settings.showExperimentalFeatures) {
                     HStack {
-                        Image(systemName: "sparkles")
-                            .foregroundColor(.orange)
+                        Image(systemName: "flask")
+                            .foregroundColor(.purple)
                         VStack(alignment: .leading) {
-                            Text("App Streaming")
-                            Text("Stream individual windows instead of full desktop")
+                            Text("Show Experimental Features")
+                            Text("Enable App Streaming and Clipboard Sync in sidebar")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                     }
                 }
+                
+                if appState.settings.showExperimentalFeatures {
+                    Toggle(isOn: Binding(
+                        get: { AppStreamingService.shared.isExperimentalEnabled },
+                        set: { AppStreamingService.shared.setExperimentalEnabled($0) }
+                    )) {
+                        HStack {
+                            Image(systemName: "app.connected.to.app.below.fill")
+                                .foregroundColor(.orange)
+                            VStack(alignment: .leading) {
+                                Text("App Streaming")
+                                Text("Stream individual windows instead of full desktop")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .padding(.leading, 24)
+                }
+                
+                Text("⚠️ These features are experimental and may not work reliably. Enable at your own risk.")
+                    .font(.caption)
+                    .foregroundColor(.orange)
             }
             
             Section {
@@ -465,7 +485,7 @@ struct AboutView: View {
         VStack(spacing: 24) {
             TidalDriftLogo(size: .medium)
             
-            Text("Version 1.1.8")
+            Text("Version 1.2.0")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             

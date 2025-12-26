@@ -109,7 +109,7 @@ struct StatusCardView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("1.2.0")
+                Text("1.3.0")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

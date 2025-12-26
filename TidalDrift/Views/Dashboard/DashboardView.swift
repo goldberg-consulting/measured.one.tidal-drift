@@ -62,32 +62,37 @@ struct DashboardView: View {
                 Label("Devices", systemImage: "desktopcomputer")
                     .tag(DashboardSection.devices)
                 
-                HStack {
-                    Label("App Streaming", systemImage: "app.connected.to.app.below.fill")
-                    Spacer()
-                    Text("β")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.orange))
-                        .foregroundColor(.white)
-                }
-                .tag(DashboardSection.appStreaming)
-                
-                HStack {
-                    Label("Clipboard Sync", systemImage: "doc.on.clipboard")
-                    Spacer()
-                    if ClipboardSyncService.shared.isEnabled {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 8, height: 8)
-                    }
-                }
-                .tag(DashboardSection.clipboardSync)
-                
                 Label("Troubleshooting", systemImage: "wrench.and.screwdriver")
                     .tag(DashboardSection.troubleshooting)
+            }
+            
+            // Only show experimental features if enabled in settings
+            if appState.settings.showExperimentalFeatures {
+                Section("Experimental") {
+                    HStack {
+                        Label("App Streaming", systemImage: "app.connected.to.app.below.fill")
+                        Spacer()
+                        Text("β")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange))
+                            .foregroundColor(.white)
+                    }
+                    .tag(DashboardSection.appStreaming)
+                    
+                    HStack {
+                        Label("Clipboard Sync", systemImage: "doc.on.clipboard")
+                        Spacer()
+                        if ClipboardSyncService.shared.isEnabled {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 8, height: 8)
+                        }
+                    }
+                    .tag(DashboardSection.clipboardSync)
+                }
             }
             
             Section("Quick Actions") {

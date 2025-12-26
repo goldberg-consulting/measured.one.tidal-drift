@@ -65,6 +65,23 @@ struct WelcomeStepView: View {
         .opacity(isAnimating ? 1 : 0)
         .offset(y: isAnimating ? 0 : 20)
     }
+    
+    private var permissionsNote: some View {
+        VStack(spacing: 8) {
+            Divider()
+                .padding(.horizontal, 40)
+            
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle")
+                    .foregroundColor(.blue)
+                Text("Next, we'll guide you through enabling Screen Sharing, File Sharing, SSH, and firewall settings.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 20)
+        }
+        .opacity(isAnimating ? 1 : 0)
+    }
 }
 
 struct FeatureRow: View {

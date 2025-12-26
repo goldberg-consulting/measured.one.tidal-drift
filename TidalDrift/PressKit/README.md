@@ -122,20 +122,32 @@ network,screen sharing,vnc,ssh,file sharing,remote access,bonjour,mac,clipboard 
 
 ## Screenshots Guide
 
-### Screenshot 1: Dashboard
-*The main dashboard showing discovered Macs with their status, services, and quick action buttons.*
+To capture App Store screenshots, run the app and take screenshots at **1280x800** resolution.
 
-### Screenshot 2: Peer Discovery
-*TidalDrift peers highlighted with the wave icon, showing hardware specs and connection options.*
+### Required Screenshots (Add to PressKit/Screenshots/ folder)
 
-### Screenshot 3: Onboarding
-*Guided setup walking through Screen Sharing, File Sharing, and SSH configuration.*
+| # | Filename | Description | How to Capture |
+|---|----------|-------------|----------------|
+| 1 | `01-dashboard.png` | Main dashboard with discovered devices | Open app, ensure 2+ devices visible |
+| 2 | `02-peer-discovery.png` | TidalDrift peers with red highlight | Have another Mac running TidalDrift |
+| 3 | `03-device-detail.png` | Device detail sheet with actions | Click on any device card |
+| 4 | `04-onboarding.png` | Setup wizard welcome screen | Settings → Run Setup Wizard Again |
+| 5 | `05-troubleshooting.png` | Drift vs Standard comparison | Navigate to Troubleshooting tab |
 
-### Screenshot 4: Clipboard Sync
-*Real-time clipboard history synced across multiple Macs.*
+### Optional Screenshots (for marketing)
 
-### Screenshot 5: TidalDrop
-*Drag-and-drop file transfer in progress between two Macs.*
+| # | Filename | Description |
+|---|----------|-------------|
+| 6 | `06-settings.png` | Settings panel |
+| 7 | `07-tidaldrop.png` | File transfer in progress |
+| 8 | `08-sidebar.png` | Sidebar with status card |
+
+### Screenshot Tips
+
+1. **Use a clean desktop** - Hide other apps
+2. **Show realistic data** - Use real device names, not "Test Mac"
+3. **Highlight the peer feature** - Show at least one TidalDrift peer (red highlight)
+4. **macOS appearance** - Use system default (Auto) for light/dark balance
 
 ---
 
