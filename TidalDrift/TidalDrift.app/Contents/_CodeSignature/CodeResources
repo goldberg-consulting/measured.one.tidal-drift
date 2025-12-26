@@ -8,22 +8,6 @@
 		<data>
 		DwKXpQmetPhJJRn4lRraVe7DamE=
 		</data>
-		<key>Resources/TidalDrift_TidalDrift.bundle/AppIcon.icns</key>
-		<data>
-		DwKXpQmetPhJJRn4lRraVe7DamE=
-		</data>
-		<key>Resources/TidalDrift_TidalDrift.bundle/Assets.xcassets/AccentColor.colorset/Contents.json</key>
-		<data>
-		1ugAdU2v/+2LP3qFRi+dDxwPulM=
-		</data>
-		<key>Resources/TidalDrift_TidalDrift.bundle/Assets.xcassets/AppIcon.appiconset/Contents.json</key>
-		<data>
-		t5Mcb7c6aZ3MbwXRWeqEQwarkO4=
-		</data>
-		<key>Resources/TidalDrift_TidalDrift.bundle/Assets.xcassets/Contents.json</key>
-		<data>
-		OsxTSdeF0zGUdTl13dMC26vX4YM=
-		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
@@ -32,34 +16,6 @@
 			<key>hash2</key>
 			<data>
 			tm1aiShmGOROew3YQOyau4Uh2vC8+PHSadQyFAWAp4o=
-			</data>
-		</dict>
-		<key>Resources/TidalDrift_TidalDrift.bundle/AppIcon.icns</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			tm1aiShmGOROew3YQOyau4Uh2vC8+PHSadQyFAWAp4o=
-			</data>
-		</dict>
-		<key>Resources/TidalDrift_TidalDrift.bundle/Assets.xcassets/AccentColor.colorset/Contents.json</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			9NazdIgVIit/CGQ6GeTHtUfsxuEOpB1BGZ0HHpfOlJw=
-			</data>
-		</dict>
-		<key>Resources/TidalDrift_TidalDrift.bundle/Assets.xcassets/AppIcon.appiconset/Contents.json</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			qT0FkpfWEIEJu99G6EJMtTu0XRQamN5iEiyauOyHCbc=
-			</data>
-		</dict>
-		<key>Resources/TidalDrift_TidalDrift.bundle/Assets.xcassets/Contents.json</key>
-		<dict>
-			<key>hash2</key>
-			<data>
-			D9Sbo8NYXHCWeOAEaoIcPGBoXscGNyDTDTo0SL46IIs=
 			</data>
 		</dict>
 	</dict>

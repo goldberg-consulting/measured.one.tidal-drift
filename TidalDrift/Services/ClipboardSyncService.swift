@@ -92,9 +92,12 @@ class ClipboardSyncService: ObservableObject {
             UserDefaults.standard.set(true, forKey: "clipboardSyncEnabled")
         }
         isEnabled = UserDefaults.standard.bool(forKey: "clipboardSyncEnabled")
-        if isEnabled {
-            startMonitoring()
-            startNetworkService()
+        
+        // Defer network operations to avoid blocking main thread during launch
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self = self, self.isEnabled else { return }
+            self.startMonitoring()
+            self.startNetworkService()
         }
     }
     

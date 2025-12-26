@@ -15,19 +15,21 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         logger.info("\(message)")
         print("🌊 TidalDrift PEER: \(message)")
         
-        // Also write to a file for debugging
-        let logPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("tidaldrift-peer.log")
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let logLine = "[\(timestamp)] \(message)\n"
-        if let data = logLine.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: logPath.path) {
-                if let handle = try? FileHandle(forWritingTo: logPath) {
-                    handle.seekToEndOfFile()
-                    handle.write(data)
-                    handle.closeFile()
+        // Write to file asynchronously to avoid blocking
+        DispatchQueue.global(qos: .utility).async {
+            let logPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("tidaldrift-peer.log")
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+            let logLine = "[\(timestamp)] \(message)\n"
+            if let data = logLine.data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: logPath.path) {
+                    if let handle = try? FileHandle(forWritingTo: logPath) {
+                        handle.seekToEndOfFile()
+                        handle.write(data)
+                        handle.closeFile()
+                    }
+                } else {
+                    try? data.write(to: logPath)
                 }
-            } else {
-                try? data.write(to: logPath)
             }
         }
     }
