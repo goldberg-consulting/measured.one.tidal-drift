@@ -132,28 +132,89 @@ For initial release, consider:
 
 ## Build for Distribution
 
-```bash
-# Clean build
-rm -rf .build TidalDrift.app
+### Quick Start (after setup)
 
-# Build release
+```bash
+./scripts/build-release.sh
+```
+
+This creates a signed, notarized DMG in `dist/TidalDrift-X.X.X.dmg`.
+
+---
+
+### One-Time Setup
+
+#### 1. Create Developer ID Certificate
+
+1. Go to [Apple Developer Certificates](https://developer.apple.com/account/resources/certificates)
+2. Click **+** to create a new certificate
+3. Select **Developer ID Application**
+4. Create a Certificate Signing Request (CSR):
+   ```bash
+   # Open Keychain Access → Certificate Assistant → Request a Certificate...
+   # Or use terminal:
+   openssl req -new -key ~/.ssh/id_rsa -out ~/Desktop/CSR.certSigningRequest
+   ```
+5. Upload CSR, download certificate, double-click to install
+
+#### 2. Store Notarization Credentials
+
+```bash
+# Get your Team ID from: https://developer.apple.com/account (Membership tab)
+# Create app-specific password at: https://appleid.apple.com/account/manage
+
+xcrun notarytool store-credentials "AC_PASSWORD" \
+  --apple-id "your-apple-id@email.com" \
+  --team-id "YOUR_TEAM_ID" \
+  --password "xxxx-xxxx-xxxx-xxxx"
+```
+
+#### 3. Verify Setup
+
+```bash
+# Check certificates
+security find-identity -v -p codesigning | grep "Developer ID"
+
+# Check notarization credentials
+xcrun notarytool history --keychain-profile "AC_PASSWORD"
+```
+
+---
+
+### Manual Build Steps (if needed)
+
+```bash
+# 1. Clean build
+rm -rf .build TidalDrift.app dist
+
+# 2. Build release
 swift build -c release
 
-# Create app bundle
+# 3. Create and sign app bundle
 ./build-app.sh
 
-# Notarize (requires Apple Developer account)
-xcrun notarytool submit TidalDrift.app \
-  --apple-id "your-apple-id" \
-  --team-id "YOUR_TEAM_ID" \
-  --password "@keychain:AC_PASSWORD" \
-  --wait
+# 4. Re-sign with Developer ID + hardened runtime
+codesign --force --options runtime --deep \
+  --sign "Developer ID Application: Your Name (TEAMID)" \
+  --entitlements TidalDrift.entitlements \
+  --timestamp TidalDrift.app
 
-# Staple
-xcrun stapler staple TidalDrift.app
+# 5. Create DMG
+mkdir dmg_temp && cp -R TidalDrift.app dmg_temp/
+ln -s /Applications dmg_temp/Applications
+hdiutil create -volname "TidalDrift" -srcfolder dmg_temp -ov -format UDZO dist/TidalDrift.dmg
 
-# Verify
-spctl --assess --verbose TidalDrift.app
+# 6. Sign DMG
+codesign --force --sign "Developer ID Application: Your Name" --timestamp dist/TidalDrift.dmg
+
+# 7. Notarize
+xcrun notarytool submit dist/TidalDrift.dmg --keychain-profile "AC_PASSWORD" --wait
+
+# 8. Staple
+xcrun stapler staple dist/TidalDrift.dmg
+
+# 9. Verify
+spctl --assess --type open dist/TidalDrift.dmg
 ```
 
 ---
