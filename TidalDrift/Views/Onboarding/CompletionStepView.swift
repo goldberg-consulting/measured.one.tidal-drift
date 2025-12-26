@@ -86,6 +86,11 @@ struct CompletionStepView: View {
                 title: "File Sharing",
                 isEnabled: viewModel.fileSharingEnabled
             )
+            
+            OnboardingStatusRow(
+                title: "Remote Login (SSH)",
+                isEnabled: viewModel.remoteLoginEnabled
+            )
         }
         .padding()
         .background(
