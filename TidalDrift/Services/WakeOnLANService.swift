@@ -175,7 +175,17 @@ class WakeOnLANService {
     
     /// Get MAC address from IP using ARP table
     func getMACAddress(for ipAddress: String) -> String? {
-        let result = ShellExecutor.execute("arp -n \(ipAddress)")
+        // Validate IP address format to prevent command injection
+        let ipParts = ipAddress.split(separator: ".")
+        guard ipParts.count == 4,
+              ipParts.allSatisfy({ part in
+                  guard let num = Int(part) else { return false }
+                  return num >= 0 && num <= 255
+              }) else {
+            return nil
+        }
+        
+        let result = ShellExecutor.execute("arp -n '\(ipAddress)'")
         
         // Parse ARP output: "? (192.168.1.100) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]"
         let pattern = "([0-9a-fA-F]{1,2}:[0-9a-fA-F]{1,2}:[0-9a-fA-F]{1,2}:[0-9a-fA-F]{1,2}:[0-9a-fA-F]{1,2}:[0-9a-fA-F]{1,2})"

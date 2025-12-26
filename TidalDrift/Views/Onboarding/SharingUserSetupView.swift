@@ -458,23 +458,30 @@ struct SharingUserSetupView: View {
                 continue
             }
             
+            // Sanitize username from dscl output to prevent any injection
+            // macOS usernames should only contain alphanumeric, underscore, hyphen
+            let safeUsername = username.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+            guard !safeUsername.isEmpty, safeUsername == username else {
+                continue // Skip invalid usernames
+            }
+            
             // Get real name
-            let realNameResult = ShellExecutor.execute("dscl . -read /Users/\(username) RealName 2>/dev/null | tail -1")
+            let realNameResult = ShellExecutor.execute("dscl . -read '/Users/\(safeUsername)' RealName 2>/dev/null | tail -1")
             var fullName = realNameResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
             if fullName.isEmpty || fullName.contains("RealName:") {
-                fullName = username
+                fullName = safeUsername
             }
             
             // Check if admin
-            let adminResult = ShellExecutor.execute("dsmemberutil checkmembership -U \(username) -G admin 2>/dev/null")
+            let adminResult = ShellExecutor.execute("dsmemberutil checkmembership -U '\(safeUsername)' -G admin 2>/dev/null")
             let isAdmin = adminResult.output.contains("is a member")
             
             // Only include users with a valid home directory (real users)
-            let homeResult = ShellExecutor.execute("dscl . -read /Users/\(username) NFSHomeDirectory 2>/dev/null")
+            let homeResult = ShellExecutor.execute("dscl . -read '/Users/\(safeUsername)' NFSHomeDirectory 2>/dev/null")
             if homeResult.output.contains("/Users/") {
                 systemUsers.append(SystemUser(
-                    id: username,
-                    username: username,
+                    id: safeUsername,
+                    username: safeUsername,
                     fullName: fullName,
                     isAdmin: isAdmin
                 ))
@@ -715,9 +722,12 @@ struct SharingUserSetupView: View {
         isCreatingUser = true
         creationResult = nil
         
+        // Username is already validated by isValidUsername regex, but escape for extra safety
+        let safeUsername = escapeForShell(username)
+        
         // Use AppleScript to create user with admin privileges
         let script = """
-        do shell script "sysadminctl -addUser \(username) -password '\(escapeForShell(password))' -hint 'Screen sharing account'" with administrator privileges
+        do shell script "sysadminctl -addUser '\(safeUsername)' -password '\(escapeForShell(password))' -hint 'Screen sharing account'" with administrator privileges
         """
         
         Task {

@@ -328,9 +328,15 @@ class NetworkDiscoveryService: ObservableObject {
     
     /// Fallback resolution using dns-sd command
     private func resolveServiceViaDNSSD(name: String, type: String, domain: String, serviceType: String) {
-        // Use dns-sd to resolve the service
+        // Sanitize inputs to prevent command injection
         let escapedName = name.replacingOccurrences(of: "'", with: "'\\''")
-        let result = ShellExecutor.execute("timeout 2 dns-sd -L '\(escapedName)' \(type) \(domain) 2>/dev/null | head -5")
+        // Service type should only contain alphanumeric, underscore, hyphen, period
+        let safeType = type.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" || $0 == "." }
+        let safeDomain = domain.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" || $0 == "." }
+        
+        guard !safeType.isEmpty else { return }
+        
+        let result = ShellExecutor.execute("timeout 2 dns-sd -L '\(escapedName)' '\(safeType)' '\(safeDomain)' 2>/dev/null | head -5")
         
         // Parse output for host info
         // Example: "hostname.local.:5900"

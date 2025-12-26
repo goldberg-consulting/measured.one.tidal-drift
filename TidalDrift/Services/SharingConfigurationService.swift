@@ -324,8 +324,12 @@ class SharingConfigurationService: ObservableObject {
             var command = "launchctl bootout system/com.openssh.sshd 2>/dev/null; launchctl enable system/com.openssh.sshd; launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist"
             
             // Also add user to SSH access group if specified
+            // Sanitize username to prevent command injection
             if let user = screenshareUser {
-                command += " && dseditgroup -o edit -a \(user) -t user com.apple.access_ssh 2>/dev/null"
+                let sanitizedUser = user.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+                if !sanitizedUser.isEmpty && sanitizedUser == user {
+                    command += " && dseditgroup -o edit -a '\(sanitizedUser)' -t user com.apple.access_ssh 2>/dev/null"
+                }
             }
             
             script = """
@@ -363,10 +367,16 @@ class SharingConfigurationService: ObservableObject {
     }
     
     func authorizeUserForSSH(username: String) async -> Bool {
-        // This is now mostly handled by the combined script in toggleRemoteLogin,
-        // but keeping it as a standalone utility if needed.
+        // Sanitize username to prevent command injection
+        // Only allow alphanumeric, underscore, hyphen (valid macOS username chars)
+        let sanitizedUsername = username.filter { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+        guard !sanitizedUsername.isEmpty, sanitizedUsername == username else {
+            logger.error("Invalid username rejected: contains unsafe characters")
+            return false
+        }
+        
         let script = """
-        do shell script "dseditgroup -o edit -a \(username) -t user com.apple.access_ssh" with administrator privileges
+        do shell script "dseditgroup -o edit -a '\(sanitizedUsername)' -t user com.apple.access_ssh" with administrator privileges
         """
         return await runAppleScript(script)
     }
