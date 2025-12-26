@@ -356,9 +356,13 @@ class TidalDropService: ObservableObject {
                 print("🌊 TidalDrop: Connection waiting: \(error)")
                 // Log specific NWError details
                 if case .posix(let posixError) = error {
-                    print("   POSIX error code: \(posixError.rawValue) - \(posixError.debugDescription)")
+                    print("   POSIX error code: \(posixError.rawValue)")
                     if posixError == .ECONNREFUSED {
                         print("   Connection refused - remote TidalDrift likely not running or port blocked")
+                    } else if posixError == .ETIMEDOUT {
+                        print("   Connection timed out - network issue or firewall")
+                    } else if posixError == .EHOSTUNREACH {
+                        print("   Host unreachable - check if target is on same network")
                     }
                 }
                 // Don't fail yet, might still connect
