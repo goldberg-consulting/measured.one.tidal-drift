@@ -48,8 +48,11 @@ class AppState: ObservableObject {
         localIPAddress = NetworkUtils.getLocalIPAddress() ?? "Unknown"
         computerName = Host.current().localizedName ?? "Unknown"
         
-        Task {
-            await checkSharingStatus()
+        // Defer sharing status check to avoid blocking UI
+        Task.detached(priority: .background) { [weak self] in
+            // Small delay to let UI render first
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await self?.checkSharingStatus()
         }
     }
     

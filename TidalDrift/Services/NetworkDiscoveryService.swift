@@ -31,8 +31,12 @@ class NetworkDiscoveryService: ObservableObject {
     
     private init() {
         loadSavedDevices()
-        setupNetworkMonitor()
-        startUDPListener()
+        
+        // Defer network setup to avoid blocking on init
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.setupNetworkMonitor()
+            self?.startUDPListener()
+        }
     }
     
     func startUDPListener() {
