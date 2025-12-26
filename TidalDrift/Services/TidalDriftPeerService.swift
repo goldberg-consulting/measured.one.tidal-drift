@@ -419,33 +419,40 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             actualIP = localInfo.ipAddress
         }
         
-        // Skip if this is ourselves
         let isSelf = name == deviceName
+        
+        // For self, use our detailed local info
+        let peer: PeerInfo
         if isSelf {
-            Self.log("✅ Found self: \(name) at \(actualIP) (skipping)")
-            return
+            Self.log("✅ Found self: \(name) at \(actualIP)")
+            peer = localInfo
+        } else {
+            Self.log("✅ Discovered peer: \(name) at \(actualIP)")
+            peer = PeerInfo(
+                hostname: name,
+                ipAddress: actualIP,
+                modelName: "Unknown",
+                modelIdentifier: "Unknown",
+                processorInfo: "Unknown",
+                memoryGB: 0,
+                macOSVersion: "Unknown",
+                userName: "Unknown",
+                uptimeHours: 0,
+                tidalDriftVersion: "1.0",
+                screenSharingEnabled: true,
+                fileSharingEnabled: true
+            )
         }
         
-        Self.log("✅ Discovered peer: \(name) at \(actualIP)")
-        
-        let peer = PeerInfo(
-            hostname: name,
-            ipAddress: actualIP,
-            modelName: "Unknown",
-            modelIdentifier: "Unknown",
-            processorInfo: "Unknown",
-            memoryGB: 0,
-            macOSVersion: "Unknown",
-            userName: "Unknown",
-            uptimeHours: 0,
-            tidalDriftVersion: "1.0",
-            screenSharingEnabled: true,
-            fileSharingEnabled: true
-        )
-        
         DispatchQueue.main.async {
-            self.discoveredPeers[actualIP] = peer
+            // Always notify network discovery to mark as TidalDrift peer
+            // (even for self - this ensures the red outline shows)
             self.notifyNetworkDiscovery(peer: peer)
+            
+            // Only add to discoveredPeers list if not self
+            if !isSelf {
+                self.discoveredPeers[actualIP] = peer
+            }
         }
     }
     
