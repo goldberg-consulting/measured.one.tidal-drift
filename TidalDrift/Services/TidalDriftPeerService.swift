@@ -11,23 +11,31 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     
     private static let logger = Logger(subsystem: "com.tidaldrift", category: "PeerService")
     
+    // Background queue for file logging to avoid blocking main thread
+    private static let logQueue = DispatchQueue(label: "com.tidaldrift.peer.log", qos: .utility)
+    
     static func log(_ message: String) {
+        // System logger and console print are fast - do immediately
         logger.info("\(message)")
+        #if DEBUG
         print("🌊 TidalDrift PEER: \(message)")
+        #endif
         
-        // Also write to a file for debugging
-        let logPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("tidaldrift-peer.log")
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let logLine = "[\(timestamp)] \(message)\n"
-        if let data = logLine.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: logPath.path) {
-                if let handle = try? FileHandle(forWritingTo: logPath) {
-                    handle.seekToEndOfFile()
-                    handle.write(data)
-                    handle.closeFile()
+        // File I/O is slow - do on background queue
+        logQueue.async {
+            let logPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("tidaldrift-peer.log")
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+            let logLine = "[\(timestamp)] \(message)\n"
+            if let data = logLine.data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: logPath.path) {
+                    if let handle = try? FileHandle(forWritingTo: logPath) {
+                        handle.seekToEndOfFile()
+                        handle.write(data)
+                        try? handle.close()
+                    }
+                } else {
+                    try? data.write(to: logPath)
                 }
-            } else {
-                try? data.write(to: logPath)
             }
         }
     }
