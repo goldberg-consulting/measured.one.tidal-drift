@@ -270,8 +270,24 @@ class SharingConfigurationService: ObservableObject {
         }
         
         let result = await runAppleScript(script)
+        
+        // If enabling, also ensure the screenshare user (if exists) is authorized
+        if enable && result {
+            if let screenshareUser = UserDefaults.standard.string(forKey: "screenShareUsername") {
+                await authorizeUserForSSH(username: screenshareUser)
+            }
+        }
+        
         await refreshStatus()
         return result
+    }
+    
+    func authorizeUserForSSH(username: String) async -> Bool {
+        // macOS uses the 'com.apple.access_ssh' group to control SSH access
+        let script = """
+        do shell script "dseditgroup -o edit -a \(username) -t user com.apple.access_ssh" with administrator privileges
+        """
+        return await runAppleScript(script)
     }
     
     private func runAppleScript(_ source: String) async -> Bool {

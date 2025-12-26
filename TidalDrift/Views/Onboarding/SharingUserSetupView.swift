@@ -40,32 +40,34 @@ struct SharingUserSetupView: View {
     }
     
     var body: some View {
-        VStack(spacing: 24) {
-            if case .success = creationResult {
-                successView
-            } else if existingUserSelected, let user = selectedExistingUser {
-                existingUserSuccessView(user: user)
-            } else {
-                header
-                
-                optionSelector
-                
-                if wantsNewUser {
-                    userCreationForm
+        ScrollView {
+            VStack(spacing: 24) {
+                if case .success = creationResult {
+                    successView
+                } else if existingUserSelected, let user = selectedExistingUser {
+                    existingUserSuccessView(user: user)
                 } else {
-                    existingUserSelector
+                    header
+                    
+                    optionSelector
+                    
+                    if wantsNewUser {
+                        userCreationForm
+                    } else {
+                        existingUserSelector
+                    }
+                    
+                    if case .failure = creationResult {
+                        resultView(creationResult!)
+                    }
+                    
+                    Spacer()
+                    
+                    navigationButtons
                 }
-                
-                if case .failure = creationResult {
-                    resultView(creationResult!)
-                }
-                
-                Spacer()
-                
-                navigationButtons
             }
+            .padding(32)
         }
-        .padding(32)
     }
     
     private var successView: some View {

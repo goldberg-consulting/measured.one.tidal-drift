@@ -6,21 +6,21 @@ struct RemoteLoginSetupView: View {
     @State private var isToggling = false
     
     var body: some View {
-        VStack(spacing: 24) {
-            headerSection
-            
-            toggleSection
-            
-            if !viewModel.remoteLoginEnabled {
-                manualInstructions
-            } else {
-                successIndicator
+        ScrollView {
+            VStack(spacing: 24) {
+                headerSection
+                
+                toggleSection
+                
+                if !viewModel.remoteLoginEnabled {
+                    manualInstructions
+                } else {
+                    successIndicator
+                }
+                
+                Spacer()
             }
-            
-            Spacer()
-        }
-        .onAppear {
-            checkStatus()
+            .padding(32)
         }
     }
     
