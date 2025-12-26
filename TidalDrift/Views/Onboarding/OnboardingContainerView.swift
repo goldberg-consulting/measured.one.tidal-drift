@@ -63,6 +63,8 @@ struct OnboardingContainerView: View {
             SharingUserSetupView(viewModel: viewModel)
         case .fileSharing:
             FileSharingSetupView(viewModel: viewModel)
+        case .sshSetup:
+            RemoteLoginSetupView(viewModel: viewModel)
         case .firewall:
             FirewallSetupView(viewModel: viewModel)
         case .completion:
@@ -102,7 +104,7 @@ struct OnboardingContainerView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             } else {
-                Button("Skip for Now") {
+                Button(viewModel.currentStep == .sshSetup ? "Skip SSH" : "Skip for Now") {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         viewModel.nextStep()
                     }
@@ -119,6 +121,7 @@ enum OnboardingStep: Int, CaseIterable {
     case screenSharing
     case sharingUser  // New: Create dedicated sharing account
     case fileSharing
+    case sshSetup     // New: Remote Login / SSH
     case firewall
     case completion
 }

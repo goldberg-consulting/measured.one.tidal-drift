@@ -257,6 +257,23 @@ class SharingConfigurationService: ObservableObject {
         return await runAppleScript(script)
     }
     
+    func toggleRemoteLogin(enable: Bool) async -> Bool {
+        let script: String
+        if enable {
+            script = """
+            do shell script "systemsetup -setremotelogin on" with administrator privileges
+            """
+        } else {
+            script = """
+            do shell script "systemsetup -setremotelogin off" with administrator privileges
+            """
+        }
+        
+        let result = await runAppleScript(script)
+        await refreshStatus()
+        return result
+    }
+    
     private func runAppleScript(_ source: String) async -> Bool {
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {

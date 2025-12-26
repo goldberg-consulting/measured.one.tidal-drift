@@ -5,6 +5,7 @@ class OnboardingViewModel: ObservableObject {
     @Published var currentStep: OnboardingStep = .welcome
     @Published var screenSharingEnabled: Bool = false
     @Published var fileSharingEnabled: Bool = false
+    @Published var remoteLoginEnabled: Bool = false
     @Published var canProceed: Bool = true
     
     private var cancellables = Set<AnyCancellable>()
@@ -14,8 +15,8 @@ class OnboardingViewModel: ObservableObject {
     }
     
     private func setupBindings() {
-        Publishers.CombineLatest($screenSharingEnabled, $fileSharingEnabled)
-            .sink { [weak self] screen, file in
+        Publishers.CombineLatest3($screenSharingEnabled, $fileSharingEnabled, $remoteLoginEnabled)
+            .sink { [weak self] _, _, _ in
                 self?.updateCanProceed()
             }
             .store(in: &cancellables)
@@ -31,6 +32,8 @@ class OnboardingViewModel: ObservableObject {
             canProceed = true // User can skip or create account
         case .fileSharing:
             canProceed = fileSharingEnabled
+        case .sshSetup:
+            canProceed = true // SSH is optional but recommended
         case .firewall:
             canProceed = true
         case .completion:
