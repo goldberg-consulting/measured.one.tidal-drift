@@ -14,11 +14,8 @@ class SharingConfigurationService: ObservableObject {
     @Published var remoteLoginEnabled: Bool = false
     
     private init() {
-        // Defer status check to avoid blocking app launch
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            Task {
-                await self.refreshStatus()
-            }
+        Task {
+            await refreshStatus()
         }
     }
     

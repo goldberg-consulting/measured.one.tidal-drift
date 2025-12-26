@@ -5,7 +5,6 @@ struct DeviceCardView: View {
     let device: DiscoveredDevice
     let onTap: () -> Void
     
-    @State private var isHovering = false
     @State private var isPressed = false
     @State private var isTargetedForDrop = false
     
@@ -35,12 +34,9 @@ struct DeviceCardView: View {
         .frame(width: 160)
         .background(cardBackground)
         .overlay(cardOverlay)
-        .shadow(color: shadowColor, radius: isHovering ? 8 : 4, x: 0, y: isHovering ? 4 : 2)
-        .scaleEffect(isPressed ? 0.97 : 1.0)
-        .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isHovering)
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) { isHovering = hovering }
-        }
+        .shadow(color: shadowColor, radius: 4, x: 0, y: 2)
+        .scaleEffect(isPressed ? 0.98 : 1.0)
+        .animation(.easeInOut(duration: 0.1), value: isPressed)
         .onTapGesture { handleTap() }
         .onDrop(of: [.fileURL], isTargeted: $isTargetedForDrop) { providers in
             handleDrop(providers: providers)
@@ -49,7 +45,7 @@ struct DeviceCardView: View {
     
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 12)
-            .fill(Color(nsColor: .controlBackgroundColor).opacity(isHovering ? 0.95 : 0.8))
+            .fill(Color(nsColor: .controlBackgroundColor))
     }
     
     private var cardOverlay: some View {
@@ -59,8 +55,8 @@ struct DeviceCardView: View {
     
     private var shadowColor: Color {
         device.isTidalDriftPeer 
-            ? Color.tidalDriftPeer.opacity(isHovering ? 0.15 : 0.08)
-            : Color.black.opacity(isHovering ? 0.08 : 0.03)
+            ? Color.tidalDriftPeer.opacity(0.1)
+            : Color.black.opacity(0.05)
     }
     
     private func handleTap() {
@@ -197,11 +193,16 @@ struct DeviceCardView: View {
                             .lineLimit(1)
                     }
                     
-                    if isHovering {
-                        hoverInfoSection
+                    // Always show peer info (no expand on hover)
+                    if let memory = device.peerMemoryGB, memory > 0,
+                       let macOS = device.peerMacOSVersion, !macOS.isEmpty {
+                        Text("\(memory)GB • macOS \(macOS)")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
                     }
                 }
-                .frame(height: isHovering ? 24 : 10)
+                .frame(height: 20)
             } else {
                 Spacer().frame(height: 10)
             }
@@ -247,25 +248,6 @@ struct DeviceCardView: View {
         }
     }
     
-    private var hoverInfoSection: some View {
-        VStack(spacing: 1) {
-            if let memory = device.peerMemoryGB, memory > 0,
-               let macOS = device.peerMacOSVersion, !macOS.isEmpty {
-                Text("\(memory)GB RAM • macOS \(macOS)")
-                    .font(.system(size: 8))
-                    .foregroundColor(.secondary)
-            }
-            
-            HStack(spacing: 4) {
-                if let user = device.peerUserName, !user.isEmpty {
-                    Text(user)
-                }
-            }
-            .font(.system(size: 8))
-            .foregroundColor(.secondary)
-        }
-        .transition(.opacity)
-    }
     
     private var onlineStatusSection: some View {
         HStack(spacing: 5) {
