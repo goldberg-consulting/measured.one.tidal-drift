@@ -299,7 +299,15 @@ class TidalDropService: ObservableObject {
         }
         
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(ipAddress), port: 5902)
-        let connection = NWConnection(to: endpoint, using: .tcp)
+        
+        // Use TCP with optimized parameters for local transfers
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.connectionTimeout = 10  // 10 second timeout
+        let params = NWParameters(tls: nil, tcp: tcpOptions)
+        params.prohibitExpensivePaths = false
+        params.prohibitConstrainedPaths = false
+        
+        let connection = NWConnection(to: endpoint, using: params)
         
         let transferId = UUID()
         let name = url.lastPathComponent
@@ -346,6 +354,13 @@ class TidalDropService: ObservableObject {
                 }
             case .waiting(let error):
                 print("🌊 TidalDrop: Connection waiting: \(error)")
+                // Log specific NWError details
+                if case .posix(let posixError) = error {
+                    print("   POSIX error code: \(posixError.rawValue) - \(posixError.debugDescription)")
+                    if posixError == .ECONNREFUSED {
+                        print("   Connection refused - remote TidalDrift likely not running or port blocked")
+                    }
+                }
                 // Don't fail yet, might still connect
             case .cancelled:
                 if !didConnect {
