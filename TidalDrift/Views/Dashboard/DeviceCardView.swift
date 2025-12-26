@@ -11,12 +11,23 @@ struct DeviceCardView: View {
     
     @ObservedObject private var dropService = TidalDropService.shared
     
+    /// Active transfer to/from this device
+    private var activeTransfer: TidalDropService.DropTransfer? {
+        dropService.activeTransfers.values.first { $0.remoteEndpoint == device.ipAddress }
+    }
+    
     var body: some View {
         VStack(spacing: 8) {
             deviceIconSection
             deviceInfoSection
             serviceBadgeSection
             peerInfoSection
+            
+            // Show transfer progress if active
+            if let transfer = activeTransfer {
+                transferProgressSection(transfer)
+            }
+            
             onlineStatusSection
             actionButtonsSection
         }
@@ -61,12 +72,42 @@ struct DeviceCardView: View {
     }
     
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-        _ = provider.loadObject(ofClass: URL.self) { url, error in
-            if let url = url {
+        guard let provider = providers.first else { 
+            print("🌊 TidalDrop: No provider in drop")
+            return false 
+        }
+        
+        // Check if device has valid IP
+        guard !device.ipAddress.isEmpty, device.ipAddress != "Unknown" else {
+            print("🌊 TidalDrop: Invalid IP address: \(device.ipAddress)")
+            return false
+        }
+        
+        print("🌊 TidalDrop: Processing drop to \(device.name) at \(device.ipAddress)")
+        
+        // Use loadItem for file URLs (more reliable than loadObject)
+        provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, error in
+            if let error = error {
+                print("🌊 TidalDrop: Load error: \(error)")
+                return
+            }
+            
+            var fileURL: URL?
+            
+            // Handle different item types
+            if let url = item as? URL {
+                fileURL = url
+            } else if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
+                fileURL = url
+            }
+            
+            if let url = fileURL {
+                print("🌊 TidalDrop: Sending \(url.lastPathComponent) to \(self.device.ipAddress)")
                 DispatchQueue.main.async {
-                    TidalDropService.shared.sendFile(at: url, to: device.ipAddress)
+                    TidalDropService.shared.sendFile(at: url, to: self.device.ipAddress)
                 }
+            } else {
+                print("🌊 TidalDrop: Could not extract URL from dropped item")
             }
         }
         return true
@@ -164,6 +205,45 @@ struct DeviceCardView: View {
             } else {
                 Spacer().frame(height: 10)
             }
+        }
+    }
+    
+    @ViewBuilder
+    private func transferProgressSection(_ transfer: TidalDropService.DropTransfer) -> some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: transfer.isIncoming ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(.accentColor)
+                
+                Text(transfer.fileName)
+                    .font(.system(size: 9))
+                    .lineLimit(1)
+                    .foregroundColor(.primary)
+            }
+            
+            ProgressView(value: transfer.progress)
+                .progressViewStyle(.linear)
+                .frame(height: 4)
+            
+            Text(transfer.status.isTransferring ? "\(Int(transfer.progress * 100))%" : statusText(transfer.status))
+                .font(.system(size: 8))
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.accentColor.opacity(0.1))
+        )
+    }
+    
+    private func statusText(_ status: TidalDropStatus) -> String {
+        switch status {
+        case .pending: return "Connecting..."
+        case .transferring: return "Transferring..."
+        case .completed: return "Complete!"
+        case .failed(let error): return "Failed: \(error)"
         }
     }
     

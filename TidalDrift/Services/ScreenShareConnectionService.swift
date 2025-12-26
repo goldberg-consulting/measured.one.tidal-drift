@@ -225,21 +225,38 @@ class ScreenShareConnectionService {
         let user = username ?? NSUserName()
         let host = device.ipAddress
         
-        // Proper AppleScript to open Terminal and run SSH
-        let script = """
+        print("🔌 SSH: Connecting to \(user)@\(host)")
+        
+        // Guard against invalid host
+        guard !host.isEmpty, host != "Unknown" else {
+            print("❌ SSH: Invalid host address: \(host)")
+            return
+        }
+        
+        // Use Process to run osascript for more reliable Terminal control
+        let sshCommand = "ssh -o StrictHostKeyChecking=accept-new \(user)@\(host)"
+        
+        let appleScript = """
         tell application "Terminal"
             activate
-            do script "ssh \(user)@\(host)"
+            set newWindow to do script "\(sshCommand)"
+            set current settings of newWindow to settings set "Basic"
         end tell
         """
         
-        var error: NSDictionary?
-        if let appleScript = NSAppleScript(source: script) {
-            let result = appleScript.executeAndReturnError(&error)
-            if let error = error {
-                print("❌ SSH AppleScript error: \(error)")
-            } else {
-                print("✅ SSH Terminal opened for \(user)@\(host)")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", appleScript]
+        
+        do {
+            try process.run()
+            print("✅ SSH: Terminal launched for \(user)@\(host)")
+        } catch {
+            print("❌ SSH: Failed to launch Terminal: \(error)")
+            
+            // Fallback: try opening terminal URL
+            if let url = URL(string: "ssh://\(user)@\(host)") {
+                NSWorkspace.shared.open(url)
             }
         }
     }
