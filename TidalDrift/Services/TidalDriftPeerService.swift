@@ -332,6 +332,10 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     private var resolveProcesses: [String: Process] = [:]
     
     private var resolvePipes: [String: Pipe] = [:]
+    private var lookupPipes: [String: Pipe] = [:]
+    private var lookupProcesses: [String: Process] = [:]
+    private var lookupCompleted: Set<String> = []
+    private let lookupLock = NSLock()
     
     private func resolveServiceViaDnsSd(name: String) {
         // Skip if already resolving this service
@@ -383,6 +387,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     }
     
     private var resolvedTXTRecords: [String: [String: String]] = [:]
+    private let txtRecordsLock = NSLock()
     
     private func parseResolveOutput(_ output: String, name: String) {
         // Parse dns-sd -L output to get host, port, and TXT record
@@ -396,10 +401,12 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                     if part.contains("=") {
                         let kv = part.components(separatedBy: "=")
                         if kv.count == 2 {
+                            txtRecordsLock.lock()
                             if resolvedTXTRecords[name] == nil {
                                 resolvedTXTRecords[name] = [:]
                             }
                             resolvedTXTRecords[name]?[kv[0]] = kv[1]
+                            txtRecordsLock.unlock()
                         }
                     }
                 }
@@ -413,9 +420,11 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                     let hostname = String(line[hostStart..<hostEnd])
                     
                     Self.log("Resolved \(name) -> host: \(hostname)")
+                    txtRecordsLock.lock()
                     if let txt = resolvedTXTRecords[name] {
                         Self.log("  TXT: \(txt)")
                     }
+                    txtRecordsLock.unlock()
                     
                     // For now, try to get IP via hostname lookup
                     lookupIP(for: name, hostname: hostname)
@@ -425,6 +434,14 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     }
     
     private func lookupIP(for name: String, hostname: String) {
+        // Skip if already looking up this name
+        lookupLock.lock()
+        if lookupProcesses[name] != nil || lookupCompleted.contains(name) {
+            lookupLock.unlock()
+            return
+        }
+        lookupLock.unlock()
+        
         // Use dns-sd -G to lookup IPv4 address
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/dns-sd")
@@ -434,32 +451,28 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         
-        // Track if we've found a result to avoid processing after termination
-        var foundResult = false
-        let lock = NSLock()
-        
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            // Thread-safe check and set
-            lock.lock()
-            if foundResult {
-                lock.unlock()
+            guard let self = self else { return }
+            
+            // Check if already completed
+            self.lookupLock.lock()
+            if self.lookupCompleted.contains(name) {
+                self.lookupLock.unlock()
                 return
             }
+            self.lookupLock.unlock()
             
             // Check if data is available (empty data means EOF/closed)
             let data: Data
             do {
                 data = handle.availableData
             } catch {
-                lock.unlock()
                 return
             }
             
             guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
-                lock.unlock()
                 return
             }
-            lock.unlock()
             
             // Parse IP from output
             let lines = output.components(separatedBy: "\n")
@@ -468,48 +481,61 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                 if let match = line.range(of: "\\d+\\.\\d+\\.\\d+\\.\\d+", options: .regularExpression) {
                     let ip = String(line[match])
                     
-                    lock.lock()
-                    if !foundResult {
-                        foundResult = true
-                        lock.unlock()
-                        
-                        // Remove handler BEFORE terminating to prevent crash
-                        pipe.fileHandleForReading.readabilityHandler = nil
-                        
-                        self?.addDiscoveredPeer(name: name, ip: ip)
-                        
-                        if process.isRunning {
-                            process.terminate()
-                        }
-                    } else {
-                        lock.unlock()
+                    // Mark as completed FIRST
+                    self.lookupLock.lock()
+                    if self.lookupCompleted.contains(name) {
+                        self.lookupLock.unlock()
+                        return
                     }
+                    self.lookupCompleted.insert(name)
+                    self.lookupLock.unlock()
+                    
+                    // Clean up
+                    self.cleanupLookup(name: name)
+                    
+                    // Add the discovered peer
+                    self.addDiscoveredPeer(name: name, ip: ip)
                     return
                 }
             }
         }
         
         do {
+            lookupLock.lock()
+            lookupProcesses[name] = process
+            lookupPipes[name] = pipe
+            lookupLock.unlock()
+            
             try process.run()
             
             // Kill lookup process after 3 seconds
-            DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-                lock.lock()
-                let alreadyFound = foundResult
-                lock.unlock()
-                
-                if !alreadyFound {
-                    // Remove handler before terminating
-                    pipe.fileHandleForReading.readabilityHandler = nil
-                }
-                
-                if process.isRunning {
-                    process.terminate()
-                }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.cleanupLookup(name: name)
             }
         } catch {
+            lookupLock.lock()
+            lookupProcesses.removeValue(forKey: name)
+            lookupPipes.removeValue(forKey: name)
+            lookupLock.unlock()
             Self.log("❌ Failed to lookup IP for \(hostname): \(error)")
         }
+    }
+    
+    private func cleanupLookup(name: String) {
+        lookupLock.lock()
+        
+        // Remove handler before terminating
+        lookupPipes[name]?.fileHandleForReading.readabilityHandler = nil
+        
+        // Terminate process if still running
+        if let process = lookupProcesses[name], process.isRunning {
+            process.terminate()
+        }
+        
+        lookupPipes.removeValue(forKey: name)
+        lookupProcesses.removeValue(forKey: name)
+        
+        lookupLock.unlock()
     }
     
     private func addDiscoveredPeer(name: String, ip: String) {
@@ -521,8 +547,10 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         
         let isSelf = name == deviceName
         
-        // Get TXT record if available
+        // Get TXT record if available (thread-safe)
+        txtRecordsLock.lock()
         let txt = resolvedTXTRecords[name]
+        txtRecordsLock.unlock()
         
         // For self, use our detailed local info
         let peer: PeerInfo
@@ -565,8 +593,15 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                 self.discoveredPeers[actualIP] = peer
             }
             
-            // Clean up TXT record cache
+            // Clean up TXT record cache (thread-safe)
+            self.txtRecordsLock.lock()
             self.resolvedTXTRecords.removeValue(forKey: name)
+            self.txtRecordsLock.unlock()
+            
+            // Clean up lookup completion tracking
+            self.lookupLock.lock()
+            self.lookupCompleted.remove(name)
+            self.lookupLock.unlock()
         }
     }
     
