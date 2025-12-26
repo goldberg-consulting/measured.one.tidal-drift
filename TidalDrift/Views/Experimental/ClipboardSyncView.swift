@@ -137,7 +137,7 @@ struct ClipboardSyncView: View {
                     VStack(spacing: 4) {
                         // This Mac
                         PeerRow(
-                            name: Host.current().localizedName ?? "This Mac",
+                            name: NetworkUtils.computerName,
                             isLocal: true,
                             itemCount: service.clipboardHistory.filter { service.isLocalItem($0) }.count
                         )

@@ -82,7 +82,7 @@ class ClipboardSyncService: ObservableObject {
     
     private let serviceType = "_tidalclip._tcp"
     private let deviceId = UUID().uuidString
-    private let deviceName = Host.current().localizedName ?? "Unknown Mac"
+    private let deviceName = NetworkUtils.computerName
     private let maxHistoryItems = 50
     private let clipboardPort: UInt16 = 51234
     

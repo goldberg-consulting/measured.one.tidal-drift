@@ -50,7 +50,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     
     private let serviceType = "_tidaldrift._tcp"
     private let dropServiceType = "_tidaldrop._tcp"
-    private let deviceName = (Host.current().localizedName ?? "TidalDrift").replacingOccurrences(of: "'", with: "").replacingOccurrences(of: " ", with: "-")
+    private let deviceName = NetworkUtils.sanitizedComputerName
     
     private let localInfo: PeerInfo
     
@@ -71,7 +71,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     
     private override init() {
         // Gather local system info
-        let hostname = Host.current().localizedName ?? "Unknown"
+        let hostname = NetworkUtils.computerName
         let ipAddress = NetworkUtils.getLocalIPAddress() ?? "Unknown"
         
         localInfo = PeerInfo(

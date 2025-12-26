@@ -19,7 +19,7 @@ class AppState: ObservableObject {
     @Published var fileSharingEnabled: Bool = false
     @Published var remoteLoginEnabled: Bool = false
     @Published var localIPAddress: String = "Unknown"
-    @Published var computerName: String = Host.current().localizedName ?? "Unknown"
+    @Published var computerName: String = NetworkUtils.computerName
     
     private var cancellables = Set<AnyCancellable>()
     
@@ -46,7 +46,7 @@ class AppState: ObservableObject {
     
     func refreshLocalInfo() {
         localIPAddress = NetworkUtils.getLocalIPAddress() ?? "Unknown"
-        computerName = Host.current().localizedName ?? "Unknown"
+        computerName = NetworkUtils.computerName
         
         // Defer sharing status check to avoid blocking UI
         Task.detached(priority: .background) { [weak self] in

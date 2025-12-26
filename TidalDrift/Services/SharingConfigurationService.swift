@@ -459,7 +459,7 @@ class SharingConfigurationService: ObservableObject {
     }
     
     func getComputerName() -> String {
-        return Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        return NetworkUtils.computerName
     }
     
     func getLocalIPAddresses() -> [String] {

@@ -121,7 +121,7 @@ class StreamingNetworkService: ObservableObject {
             let txtData = createTXTRecord(for: apps)
             
             listener?.service = NWListener.Service(
-                name: Host.current().localizedName ?? "TidalDrift",
+                name: NetworkUtils.computerName,
                 type: serviceType,
                 domain: nil,
                 txtRecord: txtData
@@ -187,7 +187,7 @@ class StreamingNetworkService: ObservableObject {
         var record = NWTXTRecord()
         
         // Add computer name
-        record["name"] = Host.current().localizedName ?? "Mac"
+        record["name"] = NetworkUtils.computerName
         
         // Add app count
         record["appCount"] = "\(apps.count)"

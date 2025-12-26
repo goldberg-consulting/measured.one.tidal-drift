@@ -4,6 +4,35 @@ import SystemConfiguration
 
 struct NetworkUtils {
     
+    // MARK: - Cached Computer Name (avoids slow DNS lookup on every call)
+    
+    /// Cached computer name - computed once to avoid repeated slow DNS lookups
+    /// Host.current().localizedName can take 2-5+ seconds on slow networks
+    private static let _cachedComputerName: String = {
+        // Use SCDynamicStoreCopyComputerName which is faster than Host.current().localizedName
+        if let name = SCDynamicStoreCopyComputerName(nil, nil) as String?, !name.isEmpty {
+            return name
+        }
+        // Fallback to ProcessInfo which is also fast
+        let hostName = ProcessInfo.processInfo.hostName
+        if !hostName.isEmpty && hostName != "localhost" {
+            return hostName.replacingOccurrences(of: ".local", with: "")
+        }
+        return "Mac"
+    }()
+    
+    /// Get the computer name (cached for performance)
+    static var computerName: String {
+        return _cachedComputerName
+    }
+    
+    /// Sanitized computer name for network service names (no spaces/special chars)
+    static var sanitizedComputerName: String {
+        return _cachedComputerName
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: " ", with: "-")
+    }
+    
     static func getLocalIPAddress() -> String? {
         var address: String?
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
