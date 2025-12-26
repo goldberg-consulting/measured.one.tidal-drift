@@ -586,6 +586,11 @@ class TidalDropService: ObservableObject {
         content.body = isIncoming ? "'\(fileName)' saved to \(folderName)" : "'\(fileName)' sent successfully"
         content.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        
+        // Auto-clear completed transfer after 5 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            self.activeTransfers.removeValue(forKey: transferId)
+        }
     }
     
     private func notifyTransferStarted(fileName: String, isIncoming: Bool) {

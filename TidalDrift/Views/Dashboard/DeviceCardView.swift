@@ -98,16 +98,57 @@ struct DeviceCardView: View {
             }
             
             if let url = fileURL {
-                print("🌊 TidalDrop: Sending \(url.lastPathComponent) to \(self.device.name)")
-                DispatchQueue.main.async {
-                    // Use smart send - tries mounted shares first, falls back to peer-to-peer
-                    TidalDropService.shared.smartSendFile(at: url, to: self.device)
+                // Check if it's a directory
+                var isDirectory: ObjCBool = false
+                FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+                
+                if isDirectory.boolValue {
+                    print("🌊 TidalDrop: Folder detected: \(url.lastPathComponent)")
+                    // For folders, send each file individually
+                    self.sendFolder(at: url)
+                } else {
+                    print("🌊 TidalDrop: Sending \(url.lastPathComponent) to \(self.device.name)")
+                    DispatchQueue.main.async {
+                        // Use smart send - tries mounted shares first, falls back to peer-to-peer
+                        TidalDropService.shared.smartSendFile(at: url, to: self.device)
+                    }
                 }
             } else {
                 print("🌊 TidalDrop: Could not extract URL from dropped item")
             }
         }
         return true
+    }
+    
+    private func sendFolder(at folderURL: URL) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Get all files in the folder (non-recursive for now)
+            let fileManager = FileManager.default
+            guard let contents = try? fileManager.contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                print("🌊 TidalDrop: Could not read folder contents")
+                return
+            }
+            
+            let files = contents.filter { url in
+                var isDir: ObjCBool = false
+                fileManager.fileExists(atPath: url.path, isDirectory: &isDir)
+                return !isDir.boolValue
+            }
+            
+            print("🌊 TidalDrop: Sending \(files.count) files from folder \(folderURL.lastPathComponent)")
+            
+            for file in files {
+                DispatchQueue.main.async {
+                    TidalDropService.shared.smartSendFile(at: file, to: self.device)
+                }
+                // Small delay between files to avoid overwhelming the receiver
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+        }
     }
     
     private var deviceIconSection: some View {

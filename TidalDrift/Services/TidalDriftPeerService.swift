@@ -357,12 +357,29 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         }
     }
     
+    private var resolvedTXTRecords: [String: [String: String]] = [:]
+    
     private func parseResolveOutput(_ output: String, name: String) {
-        // Parse dns-sd -L output to get host and port
-        // Then use dns-sd -G to get the IP address
+        // Parse dns-sd -L output to get host, port, and TXT record
         
         let lines = output.components(separatedBy: "\n")
         for line in lines {
+            // Parse TXT record entries (format: key=value)
+            if line.contains("=") && !line.contains("can be reached at") {
+                let parts = line.trimmingCharacters(in: .whitespaces).components(separatedBy: " ")
+                for part in parts {
+                    if part.contains("=") {
+                        let kv = part.components(separatedBy: "=")
+                        if kv.count == 2 {
+                            if resolvedTXTRecords[name] == nil {
+                                resolvedTXTRecords[name] = [:]
+                            }
+                            resolvedTXTRecords[name]?[kv[0]] = kv[1]
+                        }
+                    }
+                }
+            }
+            
             if line.contains("can be reached at") {
                 // Format: "ServiceName._tidaldrift._tcp.local. can be reached at hostname.local.:port"
                 if let hostRange = line.range(of: "at "), let portRange = line.range(of: ":5959") ?? line.range(of: ":\\d+", options: .regularExpression) {
@@ -371,6 +388,9 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                     let hostname = String(line[hostStart..<hostEnd])
                     
                     Self.log("Resolved \(name) -> host: \(hostname)")
+                    if let txt = resolvedTXTRecords[name] {
+                        Self.log("  TXT: \(txt)")
+                    }
                     
                     // For now, try to get IP via hostname lookup
                     lookupIP(for: name, hostname: hostname)
@@ -429,26 +449,37 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         
         let isSelf = name == deviceName
         
+        // Get TXT record if available
+        let txt = resolvedTXTRecords[name]
+        
         // For self, use our detailed local info
         let peer: PeerInfo
         if isSelf {
             Self.log("✅ Found self: \(name) at \(actualIP)")
             peer = localInfo
         } else {
+            // Use TXT record data if available, otherwise "Unknown"
+            let modelName = txt?["model"] ?? "TidalDrift Peer"
+            let osVersion = txt?["os"] ?? "macOS"
+            let userName = txt?["user"] ?? name.replacingOccurrences(of: "-", with: " ")
+            let version = txt?["version"] ?? "1.0"
+            
             Self.log("✅ Discovered peer: \(name) at \(actualIP)")
+            Self.log("   Model: \(modelName), OS: \(osVersion), User: \(userName)")
+            
             peer = PeerInfo(
                 hostname: name,
                 ipAddress: actualIP,
-                modelName: "Unknown",
-                modelIdentifier: "Unknown",
-                processorInfo: "Unknown",
-                memoryGB: 0,
-                macOSVersion: "Unknown",
-                userName: "Unknown",
-                uptimeHours: 0,
-                tidalDriftVersion: "1.0",
-                screenSharingEnabled: true,
-                fileSharingEnabled: true
+                modelName: modelName,
+                modelIdentifier: txt?["modelId"] ?? "",
+                processorInfo: txt?["cpu"] ?? "",
+                memoryGB: Int(txt?["mem"] ?? "0") ?? 0,
+                macOSVersion: osVersion,
+                userName: userName,
+                uptimeHours: Int(txt?["uptime"] ?? "0") ?? 0,
+                tidalDriftVersion: version,
+                screenSharingEnabled: txt?["screen"] == "1",
+                fileSharingEnabled: txt?["file"] == "1"
             )
         }
         
@@ -461,6 +492,9 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             if !isSelf {
                 self.discoveredPeers[actualIP] = peer
             }
+            
+            // Clean up TXT record cache
+            self.resolvedTXTRecords.removeValue(forKey: name)
         }
     }
     
