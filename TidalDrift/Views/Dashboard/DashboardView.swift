@@ -192,18 +192,15 @@ struct DashboardView: View {
                 .frame(width: 80)
                 .labelsHidden()
                 
-                // Clear stale devices button (only show if there are stale devices)
-                let staleCount = appState.discoveredDevices.filter { $0.isStale }.count
-                if staleCount > 0 {
-                    Button {
-                        discoveryService.removeStaleDevices()
-                    } label: {
-                        Label("Clear \(staleCount) Old", systemImage: "clock.badge.xmark")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Remove devices not seen in 24+ hours")
+                // Clear all and rescan button
+                Button {
+                    discoveryService.clearAllAndRescan()
+                } label: {
+                    Label("Clear & Rescan", systemImage: "arrow.triangle.2.circlepath")
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Clear all devices and rediscover from scratch")
             }
             .padding()
             

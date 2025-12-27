@@ -97,6 +97,12 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
         Date().timeIntervalSince(lastSeen) < 60
     }
     
+    /// Check if this device is the current Mac (by IP address)
+    var isCurrentDevice: Bool {
+        guard let localIP = NetworkUtils.getLocalIPAddress() else { return false }
+        return ipAddress == localIP
+    }
+    
     /// Device hasn't been seen in 24+ hours
     var isStale: Bool {
         Date().timeIntervalSince(lastSeen) > 24 * 60 * 60

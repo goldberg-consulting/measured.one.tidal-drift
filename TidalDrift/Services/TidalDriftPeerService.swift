@@ -420,11 +420,21 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                     if part.contains("=") {
                         let kv = part.components(separatedBy: "=")
                         if kv.count == 2 {
+                            let key = kv[0]
+                            // Clean up value: remove trailing backslashes, escape chars, and trim
+                            var value = kv[1]
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .replacingOccurrences(of: "\\", with: "")
+                            // Remove quotes if wrapped
+                            if value.hasPrefix("\"") && value.hasSuffix("\"") {
+                                value = String(value.dropFirst().dropLast())
+                            }
+                            
                             txtRecordsLock.lock()
                             if resolvedTXTRecords[name] == nil {
                                 resolvedTXTRecords[name] = [:]
                             }
-                            resolvedTXTRecords[name]?[kv[0]] = kv[1]
+                            resolvedTXTRecords[name]?[key] = value
                             txtRecordsLock.unlock()
                         }
                     }
@@ -743,14 +753,42 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         sysctlbyname("hw.model", &model, &size, nil, 0)
         let modelString = String(cString: model)
         
+        // Check for specific model identifiers
         if modelString.contains("MacBookPro") { return "MacBook Pro" }
         if modelString.contains("MacBookAir") { return "MacBook Air" }
         if modelString.contains("iMac") { return "iMac" }
         if modelString.contains("Macmini") { return "Mac mini" }
         if modelString.contains("MacPro") { return "Mac Pro" }
         if modelString.contains("MacStudio") { return "Mac Studio" }
-        if modelString.contains("Mac14") || modelString.contains("Mac15") { return "MacBook Pro" }
+        
+        // Apple Silicon Macs use "MacXX,Y" format
+        // Mac14,x = MacBook Pro (M2/M2 Pro/M2 Max), Mac mini (M2), MacBook Air (M2)
+        // Mac15,x = MacBook Pro (M3/M3 Pro/M3 Max), MacBook Air (M3), iMac (M3)
+        // Mac16,x = MacBook Pro (M4/M4 Pro/M4 Max), Mac mini (M4)
+        // Mac17,x = MacBook Pro (M5?), etc.
+        if modelString.hasPrefix("Mac") {
+            // Try to determine type from system info
+            if let productName = getProductName() {
+                return productName
+            }
+            // Fallback based on common patterns
+            return "Mac"
+        }
+        
         return modelString
+    }
+    
+    /// Try to get the marketing product name from IOKit
+    private static func getProductName() -> String? {
+        var size = 0
+        if sysctlbyname("hw.product", nil, &size, nil, 0) == 0 {
+            var product = [CChar](repeating: 0, count: size)
+            if sysctlbyname("hw.product", &product, &size, nil, 0) == 0 {
+                let name = String(cString: product)
+                if !name.isEmpty { return name }
+            }
+        }
+        return nil
     }
     
     private static func getModelIdentifier() -> String {

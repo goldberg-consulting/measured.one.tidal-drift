@@ -50,13 +50,27 @@ struct DeviceCardView: View {
     
     private var cardOverlay: some View {
         RoundedRectangle(cornerRadius: 12)
-            .stroke(isTargetedForDrop ? Color.accentColor : (device.isTidalDriftPeer ? Color.tidalDriftPeer.opacity(0.4) : Color.primary.opacity(0.05)), lineWidth: isTargetedForDrop ? 2 : 1)
+            .stroke(borderColor, lineWidth: isTargetedForDrop || device.isCurrentDevice ? 2 : 1)
+    }
+    
+    private var borderColor: Color {
+        if isTargetedForDrop {
+            return Color.accentColor
+        } else if device.isCurrentDevice {
+            return Color.blue.opacity(0.6)
+        } else if device.isTidalDriftPeer {
+            return Color.tidalDriftPeer.opacity(0.4)
+        }
+        return Color.primary.opacity(0.05)
     }
     
     private var shadowColor: Color {
-        device.isTidalDriftPeer 
-            ? Color.tidalDriftPeer.opacity(0.1)
-            : Color.black.opacity(0.05)
+        if device.isCurrentDevice {
+            return Color.blue.opacity(0.15)
+        } else if device.isTidalDriftPeer {
+            return Color.tidalDriftPeer.opacity(0.1)
+        }
+        return Color.black.opacity(0.05)
     }
     
     private func handleTap() {
@@ -157,9 +171,7 @@ struct DeviceCardView: View {
                 Circle()
                     .fill(
                         LinearGradient(
-                            colors: device.isTidalDriftPeer 
-                                ? [Color.tidalDriftPeer.opacity(0.15), Color.tidalDriftPeer.opacity(0.05)]
-                                : [Color.secondary.opacity(0.1), Color.secondary.opacity(0.05)],
+                            colors: iconGradientColors,
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -168,10 +180,22 @@ struct DeviceCardView: View {
                 
                 Image(systemName: device.deviceIcon)
                     .font(.system(size: 22, weight: .light))
-                    .foregroundColor(device.isTidalDriftPeer ? .tidalDriftPeer : .primary.opacity(0.8))
+                    .foregroundColor(iconColor)
             }
             
-            if device.isTidalDriftPeer {
+            // Badge in bottom-right corner
+            if device.isCurrentDevice {
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 14, height: 14)
+                    .overlay(
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundColor(.white)
+                    )
+                    .background(Circle().stroke(Color(nsColor: .controlBackgroundColor), lineWidth: 2))
+                    .offset(x: 2, y: 2)
+            } else if device.isTidalDriftPeer {
                 Circle()
                     .fill(Color.tidalDriftPeer)
                     .frame(width: 14, height: 14)
@@ -187,6 +211,24 @@ struct DeviceCardView: View {
         .padding(.top, 4)
     }
     
+    private var iconGradientColors: [Color] {
+        if device.isCurrentDevice {
+            return [Color.blue.opacity(0.2), Color.blue.opacity(0.08)]
+        } else if device.isTidalDriftPeer {
+            return [Color.tidalDriftPeer.opacity(0.15), Color.tidalDriftPeer.opacity(0.05)]
+        }
+        return [Color.secondary.opacity(0.1), Color.secondary.opacity(0.05)]
+    }
+    
+    private var iconColor: Color {
+        if device.isCurrentDevice {
+            return .blue
+        } else if device.isTidalDriftPeer {
+            return .tidalDriftPeer
+        }
+        return .primary.opacity(0.8)
+    }
+    
     private var deviceInfoSection: some View {
         VStack(spacing: 2) {
             Text(device.name)
@@ -195,16 +237,33 @@ struct DeviceCardView: View {
             
             Text(device.ipAddress)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundColor(.secondary)
+                .foregroundColor(device.isCurrentDevice ? .blue : .secondary)
                 .lineLimit(1)
             
-            if device.isTidalDriftPeer, let model = device.peerModelName, !model.isEmpty {
-                Text(model)
+            if device.isCurrentDevice {
+                Text("THIS MAC")
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.blue))
+            } else if device.isTidalDriftPeer, let model = device.peerModelName, !model.isEmpty {
+                Text(cleanModelName(model))
                     .font(.system(size: 9, weight: .medium))
                     .foregroundColor(.tidalDriftPeer.opacity(0.8))
                     .lineLimit(1)
             }
         }
+    }
+    
+    /// Clean up model name formatting issues (remove trailing backslashes, etc.)
+    private func cleanModelName(_ name: String) -> String {
+        var cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Remove trailing backslash or other escape characters
+        while cleaned.hasSuffix("\\") || cleaned.hasSuffix("/") {
+            cleaned = String(cleaned.dropLast())
+        }
+        return cleaned
     }
     
     private var serviceBadgeSection: some View {
@@ -226,10 +285,10 @@ struct DeviceCardView: View {
     
     private var peerInfoSection: some View {
         Group {
-            if device.isTidalDriftPeer {
+            if device.isTidalDriftPeer && !device.isCurrentDevice {
                 VStack(spacing: 2) {
                     if let processor = device.peerProcessorInfo, !processor.isEmpty {
-                        Text(processor)
+                        Text(cleanModelName(processor))
                             .font(.system(size: 8))
                             .foregroundColor(.secondary.opacity(0.8))
                             .lineLimit(1)
@@ -238,7 +297,7 @@ struct DeviceCardView: View {
                     // Always show peer info (no expand on hover)
                     if let memory = device.peerMemoryGB, memory > 0,
                        let macOS = device.peerMacOSVersion, !macOS.isEmpty {
-                        Text("\(memory)GB • macOS \(macOS)")
+                        Text("\(memory)GB • macOS \(cleanModelName(macOS))")
                             .font(.system(size: 8))
                             .foregroundColor(.secondary)
                             .lineLimit(1)

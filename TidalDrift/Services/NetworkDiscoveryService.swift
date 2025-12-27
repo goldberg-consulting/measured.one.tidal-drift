@@ -164,16 +164,29 @@ class NetworkDiscoveryService: ObservableObject {
         saveDevices()
     }
     
-    /// Remove all stale devices
-    func removeStaleDevices() {
+    /// Remove all non-TidalDrift devices (used before a fresh scan)
+    func clearNonPeerDevices() {
         deviceCacheLock.lock()
-        let staleIPs = deviceCache.filter { isDeviceStale($0.value) }.map { $0.key }
-        for ip in staleIPs {
+        let nonPeerIPs = deviceCache.filter { !$0.value.isTidalDriftPeer }.map { $0.key }
+        for ip in nonPeerIPs {
             deviceCache.removeValue(forKey: ip)
         }
         deviceCacheLock.unlock()
         updatePublishedDevices()
+        print("🧹 Cleared \(nonPeerIPs.count) non-peer devices for fresh scan")
+    }
+    
+    /// Clear ALL devices and rediscover (full reset)
+    func clearAllAndRescan() {
+        deviceCacheLock.lock()
+        deviceCache.removeAll()
+        deviceCacheLock.unlock()
+        updatePublishedDevices()
         saveDevices()
+        print("🧹 Cleared all devices - starting fresh discovery")
+        
+        // Trigger fresh discovery
+        refreshScan()
     }
     
     private func setupNetworkMonitor() {
@@ -796,6 +809,9 @@ class NetworkDiscoveryService: ObservableObject {
         await MainActor.run {
             isScanningSubnet = true
             scanProgress = 0.01 // Show immediate progress
+            
+            // Clear non-TidalDrift devices before scanning - fresh discovery
+            clearNonPeerDevices()
         }
         
         // Parse base IP (e.g., "192.168.1" from "192.168.1.100")
