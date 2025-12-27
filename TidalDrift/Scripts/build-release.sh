@@ -67,9 +67,9 @@ echo -e "\n${BLUE}[1/6] Cleaning previous build...${NC}"
 rm -rf .build TidalDrift.app "${DIST_DIR}"
 mkdir -p "${DIST_DIR}"
 
-# Step 2: Build release
+# Step 2: Build release (single-threaded to avoid compiler race conditions)
 echo -e "\n${BLUE}[2/6] Building release...${NC}"
-swift build -c release
+swift build -c release -j 1
 
 # Step 3: Create app bundle
 echo -e "\n${BLUE}[3/6] Creating app bundle...${NC}"

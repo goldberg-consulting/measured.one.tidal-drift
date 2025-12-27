@@ -15,6 +15,10 @@ class NetworkDiscoveryService: ObservableObject {
     private var pathMonitor: NWPathMonitor?
     private let queue = DispatchQueue(label: "com.tidaldrift.discovery", qos: .userInitiated)
     
+    // Store active connections to prevent premature deallocation
+    private var activeConnections: [UUID: NWConnection] = [:]
+    private let connectionsLock = NSLock()
+    
     // Persistence keys
     private let savedDevicesKey = "com.tidaldrift.savedDevices"
     private let lastScanDateKey = "com.tidaldrift.lastScanDate"
@@ -319,6 +323,12 @@ class NetworkDiscoveryService: ObservableObject {
         
         let endpoint = NWEndpoint.service(name: name, type: type, domain: domain, interface: nil)
         let connection = NWConnection(to: endpoint, using: params)
+        let connectionId = UUID()
+        
+        // Store connection to prevent premature deallocation
+        connectionsLock.lock()
+        activeConnections[connectionId] = connection
+        connectionsLock.unlock()
         
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
@@ -326,11 +336,16 @@ class NetworkDiscoveryService: ObservableObject {
                 if let innerEndpoint = connection.currentPath?.remoteEndpoint {
                     self?.extractIPAddress(from: innerEndpoint, name: name, serviceType: serviceType)
                 }
-                connection.cancel()
+                self?.cleanupConnection(id: connectionId)
             case .failed:
                 // Try fallback resolution via dns-sd
                 self?.resolveServiceViaDNSSD(name: name, type: type, domain: domain, serviceType: serviceType)
-                connection.cancel()
+                self?.cleanupConnection(id: connectionId)
+            case .cancelled:
+                // Remove from storage once fully cancelled
+                self?.connectionsLock.lock()
+                self?.activeConnections.removeValue(forKey: connectionId)
+                self?.connectionsLock.unlock()
             default:
                 break
             }
@@ -338,13 +353,26 @@ class NetworkDiscoveryService: ObservableObject {
         
         connection.start(queue: queue)
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            if connection.state != .ready && connection.state != .cancelled {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.connectionsLock.lock()
+            let conn = self?.activeConnections[connectionId]
+            self?.connectionsLock.unlock()
+            
+            if let conn = conn, conn.state != .ready && conn.state != .cancelled {
                 // Timeout - try fallback
-                self.resolveServiceViaDNSSD(name: name, type: type, domain: domain, serviceType: serviceType)
-                connection.cancel()
+                self?.resolveServiceViaDNSSD(name: name, type: type, domain: domain, serviceType: serviceType)
+                self?.cleanupConnection(id: connectionId)
             }
         }
+    }
+    
+    private func cleanupConnection(id: UUID) {
+        connectionsLock.lock()
+        if let connection = activeConnections[id] {
+            connection.cancel()
+            // Don't remove here - wait for .cancelled state
+        }
+        connectionsLock.unlock()
     }
     
     /// Fallback resolution using dns-sd command
@@ -688,18 +716,35 @@ class NetworkDiscoveryService: ObservableObject {
             let host = NWEndpoint.Host(ipAddress)
             let port = NWEndpoint.Port(rawValue: UInt16(port))!
             let connection = NWConnection(host: host, port: port, using: .tcp)
+            let connectionId = UUID()
+            
+            // Store connection to prevent premature deallocation
+            self.connectionsLock.lock()
+            self.activeConnections[connectionId] = connection
+            self.connectionsLock.unlock()
             
             let didResume = AtomicFlag()
             
-            connection.stateUpdateHandler = { state in
-                guard !didResume.value else { return }
-                
+            connection.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
+                    guard !didResume.value else { return }
                     didResume.value = true
-                    connection.cancel()
+                    self?.cleanupConnection(id: connectionId)
                     continuation.resume(returning: true)
-                case .failed, .cancelled:
+                case .failed:
+                    guard !didResume.value else { return }
+                    didResume.value = true
+                    self?.cleanupConnection(id: connectionId)
+                    continuation.resume(returning: false)
+                case .cancelled:
+                    // Clean up storage once fully cancelled
+                    self?.connectionsLock.lock()
+                    self?.activeConnections.removeValue(forKey: connectionId)
+                    self?.connectionsLock.unlock()
+                    
+                    // Resume if not already done (timeout case)
+                    guard !didResume.value else { return }
                     didResume.value = true
                     continuation.resume(returning: false)
                 default:
@@ -710,10 +755,10 @@ class NetworkDiscoveryService: ObservableObject {
             connection.start(queue: self.queue)
             
             // 2 second timeout per IP
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak self] in
                 guard !didResume.value else { return }
                 didResume.value = true
-                connection.cancel()
+                self?.cleanupConnection(id: connectionId)
                 continuation.resume(returning: false)
             }
         }
