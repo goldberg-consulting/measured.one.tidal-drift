@@ -330,8 +330,9 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     }
     
     private var resolveProcesses: [String: Process] = [:]
-    
     private var resolvePipes: [String: Pipe] = [:]
+    private let resolveLock = NSLock()  // Thread-safe access to resolve dictionaries
+    
     private var lookupPipes: [String: Pipe] = [:]
     private var lookupProcesses: [String: Process] = [:]
     private var lookupCompleted: Set<String> = []
@@ -343,7 +344,10 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     
     private func resolveServiceViaDnsSd(name: String) {
         // Skip if already resolving this service
-        guard resolveProcesses[name] == nil else { return }
+        resolveLock.lock()
+        let alreadyResolving = resolveProcesses[name] != nil
+        resolveLock.unlock()
+        guard !alreadyResolving else { return }
         
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/dns-sd")
@@ -371,23 +375,34 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         
         do {
             try process.run()
+            
+            resolveLock.lock()
             resolveProcesses[name] = process
             resolvePipes[name] = pipe
+            resolveLock.unlock()
             
             // Kill resolve process after 5 seconds
             DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak self] in
-                // Remove handler before terminating
-                self?.resolvePipes[name]?.fileHandleForReading.readabilityHandler = nil
-                self?.resolvePipes[name] = nil
-                
-                if let p = self?.resolveProcesses[name], p.isRunning {
-                    p.terminate()
-                }
-                self?.resolveProcesses[name] = nil
+                self?.cleanupResolve(name: name)
             }
         } catch {
             Self.log("❌ Failed to resolve \(name): \(error)")
         }
+    }
+    
+    private func cleanupResolve(name: String) {
+        resolveLock.lock()
+        
+        // Remove handler before terminating
+        resolvePipes[name]?.fileHandleForReading.readabilityHandler = nil
+        resolvePipes[name] = nil
+        
+        if let p = resolveProcesses[name], p.isRunning {
+            p.terminate()
+        }
+        resolveProcesses[name] = nil
+        
+        resolveLock.unlock()
     }
     
     private var resolvedTXTRecords: [String: [String: String]] = [:]
