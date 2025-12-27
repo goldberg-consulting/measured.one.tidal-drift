@@ -337,6 +337,10 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     private var lookupCompleted: Set<String> = []
     private let lookupLock = NSLock()
     
+    // Store NWConnection instances to prevent premature deallocation
+    private var activeNWConnections: [UUID: NWConnection] = [:]
+    private let nwConnectionsLock = NSLock()
+    
     private func resolveServiceViaDnsSd(name: String) {
         // Skip if already resolving this service
         guard resolveProcesses[name] == nil else { return }
@@ -626,9 +630,16 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         // Create a temporary connection to resolve the IP address
         let endpoint = NWEndpoint.service(name: name, type: type, domain: domain, interface: nil)
         let connection = NWConnection(to: endpoint, using: .tcp)
+        let connectionId = UUID()
+        
+        // Store connection to prevent premature deallocation
+        nwConnectionsLock.lock()
+        activeNWConnections[connectionId] = connection
+        nwConnectionsLock.unlock()
         
         connection.stateUpdateHandler = { [weak self] state in
-            if case .ready = state {
+            switch state {
+            case .ready:
                 if let path = connection.currentPath,
                    case .hostPort(let host, _) = path.remoteEndpoint {
                     
@@ -649,18 +660,32 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                         self?.addPeer(name: name, ip: ipAddress, txt: txtRecord)
                     }
                 }
-                connection.cancel()
-            } else if case .failed = state {
-                connection.cancel()
+                self?.cleanupNWConnection(id: connectionId)
+            case .failed:
+                self?.cleanupNWConnection(id: connectionId)
+            case .cancelled:
+                self?.nwConnectionsLock.lock()
+                self?.activeNWConnections.removeValue(forKey: connectionId)
+                self?.nwConnectionsLock.unlock()
+            default:
+                break
             }
         }
         
         connection.start(queue: queue)
         
         // Timeout after 5 seconds
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak self] in
+            self?.cleanupNWConnection(id: connectionId)
+        }
+    }
+    
+    private func cleanupNWConnection(id: UUID) {
+        nwConnectionsLock.lock()
+        if let connection = activeNWConnections[id] {
             connection.cancel()
         }
+        nwConnectionsLock.unlock()
     }
     
     private func addPeer(name: String, ip: String, txt: NWTXTRecord?) {

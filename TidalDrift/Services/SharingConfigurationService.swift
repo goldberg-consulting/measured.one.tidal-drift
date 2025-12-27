@@ -13,6 +13,10 @@ class SharingConfigurationService: ObservableObject {
     @Published var fileSharingEnabled: Bool = false
     @Published var remoteLoginEnabled: Bool = false
     
+    // Store active connections to prevent premature deallocation
+    private var activeConnections: [UUID: NWConnection] = [:]
+    private let connectionsLock = NSLock()
+    
     private init() {
         Task {
             await refreshStatus()
@@ -51,35 +55,67 @@ class SharingConfigurationService: ObservableObject {
         if method1 { return true }
         
         // Method 2: Fast port check using NWConnection (much faster than system_profiler/lsof)
+        return await checkLocalPort(5900)
+    }
+    
+    /// Helper to check if a local port is open (with proper connection lifetime management)
+    private func checkLocalPort(_ portNumber: UInt16, timeout: TimeInterval = 0.3) async -> Bool {
         return await withCheckedContinuation { continuation in
             let host = NWEndpoint.Host("127.0.0.1")
-            let port = NWEndpoint.Port(rawValue: 5900)!
+            let port = NWEndpoint.Port(rawValue: portNumber)!
             let connection = NWConnection(host: host, port: port, using: .tcp)
+            let connectionId = UUID()
+            
+            // Store connection to prevent premature deallocation
+            self.connectionsLock.lock()
+            self.activeConnections[connectionId] = connection
+            self.connectionsLock.unlock()
             
             let didResume = AtomicFlag()
-            connection.stateUpdateHandler = { state in
-                guard !didResume.value else { return }
-                if case .ready = state {
+            
+            connection.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .ready:
+                    guard !didResume.value else { return }
                     didResume.value = true
-                    connection.cancel()
+                    self?.cleanupConnection(id: connectionId)
                     continuation.resume(returning: true)
-                } else if case .failed = state {
+                case .failed:
+                    guard !didResume.value else { return }
                     didResume.value = true
-                    connection.cancel()
+                    self?.cleanupConnection(id: connectionId)
                     continuation.resume(returning: false)
+                case .cancelled:
+                    self?.connectionsLock.lock()
+                    self?.activeConnections.removeValue(forKey: connectionId)
+                    self?.connectionsLock.unlock()
+                    
+                    guard !didResume.value else { return }
+                    didResume.value = true
+                    continuation.resume(returning: false)
+                default:
+                    break
                 }
             }
             
             connection.start(queue: .global())
             
-            // 0.3 second timeout for localhost
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
+            // Timeout for localhost
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak self] in
                 guard !didResume.value else { return }
                 didResume.value = true
-                connection.cancel()
+                self?.cleanupConnection(id: connectionId)
                 continuation.resume(returning: false)
             }
         }
+    }
+    
+    private func cleanupConnection(id: UUID) {
+        connectionsLock.lock()
+        if let connection = activeConnections[id] {
+            connection.cancel()
+        }
+        connectionsLock.unlock()
     }
     
     func isFileSharingEnabled() async -> Bool {
@@ -107,73 +143,14 @@ class SharingConfigurationService: ObservableObject {
         if method1 { return true }
         
         // Method 2: Fast port check using NWConnection (much faster than lsof)
-        return await withCheckedContinuation { continuation in
-            let host = NWEndpoint.Host("127.0.0.1")
-            let port = NWEndpoint.Port(rawValue: 445)!
-            let connection = NWConnection(host: host, port: port, using: .tcp)
-            
-            let didResume = AtomicFlag()
-            connection.stateUpdateHandler = { state in
-                guard !didResume.value else { return }
-                if case .ready = state {
-                    didResume.value = true
-                    connection.cancel()
-                    continuation.resume(returning: true)
-                } else if case .failed = state {
-                    didResume.value = true
-                    connection.cancel()
-                    continuation.resume(returning: false)
-                }
-            }
-            
-            connection.start(queue: .global())
-            
-            // 0.3 second timeout for localhost
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
-                guard !didResume.value else { return }
-                didResume.value = true
-                connection.cancel()
-                continuation.resume(returning: false)
-            }
-        }
+        return await checkLocalPort(445)
     }
     
     func isRemoteLoginEnabled() async -> Bool {
         logger.info("Checking Remote Login status...")
         
         // Method 1: Check by testing local port 22
-        let portCheck = await withCheckedContinuation { continuation in
-            let host = NWEndpoint.Host("127.0.0.1")
-            let port = NWEndpoint.Port(rawValue: 22)!
-            let connection = NWConnection(host: host, port: port, using: .tcp)
-            
-            let didResume = AtomicFlag()
-            connection.stateUpdateHandler = { state in
-                guard !didResume.value else { return }
-                if case .ready = state {
-                    logger.info("Port 22 check: OPEN (connection ready)")
-                    didResume.value = true
-                    connection.cancel()
-                    continuation.resume(returning: true)
-                } else if case .failed(let error) = state {
-                    logger.info("Port 22 check: CLOSED (failed: \(error))")
-                    didResume.value = true
-                    connection.cancel()
-                    continuation.resume(returning: false)
-                }
-            }
-            
-            connection.start(queue: .global())
-            
-            // 0.5 second timeout for local check - should be fast for localhost
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
-                guard !didResume.value else { return }
-                logger.info("Port 22 check: TIMEOUT")
-                didResume.value = true
-                connection.cancel()
-                continuation.resume(returning: false)
-            }
-        }
+        let portCheck = await checkLocalPort(22, timeout: 0.5)
         
         if portCheck {
             logger.info("Result: SSH ENABLED (port check passed)")

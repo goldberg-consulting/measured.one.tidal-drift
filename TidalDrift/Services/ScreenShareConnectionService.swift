@@ -63,6 +63,10 @@ enum ScreenShareMode {
 class ScreenShareConnectionService {
     static let shared = ScreenShareConnectionService()
     
+    // Store active connections to prevent premature deallocation
+    private var activeConnections: [UUID: NWConnection] = [:]
+    private let connectionsLock = NSLock()
+    
     private init() {}
     
     func connect(to device: DiscoveredDevice, mode: ScreenShareMode = .control, username: String? = nil, password: String? = nil) async throws {
@@ -266,18 +270,33 @@ class ScreenShareConnectionService {
             let host = NWEndpoint.Host(ipAddress)
             let port = NWEndpoint.Port(rawValue: UInt16(port))!
             let connection = NWConnection(host: host, port: port, using: .tcp)
+            let connectionId = UUID()
+            
+            // Store connection to prevent premature deallocation
+            self.connectionsLock.lock()
+            self.activeConnections[connectionId] = connection
+            self.connectionsLock.unlock()
             
             let didResume = AtomicFlag()
             
-            connection.stateUpdateHandler = { state in
-                guard !didResume.value else { return }
-                
+            connection.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
+                    guard !didResume.value else { return }
                     didResume.value = true
-                    connection.cancel()
+                    self?.cleanupConnection(id: connectionId)
                     continuation.resume(returning: true)
-                case .failed, .cancelled:
+                case .failed:
+                    guard !didResume.value else { return }
+                    didResume.value = true
+                    self?.cleanupConnection(id: connectionId)
+                    continuation.resume(returning: false)
+                case .cancelled:
+                    self?.connectionsLock.lock()
+                    self?.activeConnections.removeValue(forKey: connectionId)
+                    self?.connectionsLock.unlock()
+                    
+                    guard !didResume.value else { return }
                     didResume.value = true
                     continuation.resume(returning: false)
                 default:
@@ -287,13 +306,21 @@ class ScreenShareConnectionService {
             
             connection.start(queue: .global())
             
-            DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak self] in
                 guard !didResume.value else { return }
                 didResume.value = true
-                connection.cancel()
+                self?.cleanupConnection(id: connectionId)
                 continuation.resume(returning: false)
             }
         }
+    }
+    
+    private func cleanupConnection(id: UUID) {
+        connectionsLock.lock()
+        if let connection = activeConnections[id] {
+            connection.cancel()
+        }
+        connectionsLock.unlock()
     }
     
     // MARK: - Remote Screen Sharing Fix
@@ -368,14 +395,20 @@ class ScreenShareConnectionService {
             let host = NWEndpoint.Host(ipAddress)
             let portEndpoint = NWEndpoint.Port(rawValue: port)!
             let connection = NWConnection(host: host, port: portEndpoint, using: .tcp)
+            let connectionId = UUID()
+            
+            // Store connection to prevent premature deallocation
+            self.connectionsLock.lock()
+            self.activeConnections[connectionId] = connection
+            self.connectionsLock.unlock()
             
             let didResume = AtomicFlag()
             
-            connection.stateUpdateHandler = { state in
-                guard !didResume.value else { return }
-                
+            connection.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
+                    guard !didResume.value else { return }
+                    
                     // Send the restart command
                     let command = "RESTART_SCREEN_SHARING\n"
                     let data = Data(command.utf8)
@@ -383,7 +416,7 @@ class ScreenShareConnectionService {
                     connection.send(content: data, completion: .contentProcessed { error in
                         guard !didResume.value else { return }
                         didResume.value = true
-                        connection.cancel()
+                        self?.cleanupConnection(id: connectionId)
                         
                         if error == nil {
                             continuation.resume(returning: true)
@@ -392,7 +425,18 @@ class ScreenShareConnectionService {
                         }
                     })
                     
-                case .failed, .cancelled:
+                case .failed:
+                    guard !didResume.value else { return }
+                    didResume.value = true
+                    self?.cleanupConnection(id: connectionId)
+                    continuation.resume(returning: false)
+                    
+                case .cancelled:
+                    self?.connectionsLock.lock()
+                    self?.activeConnections.removeValue(forKey: connectionId)
+                    self?.connectionsLock.unlock()
+                    
+                    guard !didResume.value else { return }
                     didResume.value = true
                     continuation.resume(returning: false)
                     
@@ -404,10 +448,10 @@ class ScreenShareConnectionService {
             connection.start(queue: .global())
             
             // Timeout
-            DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak self] in
                 guard !didResume.value else { return }
                 didResume.value = true
-                connection.cancel()
+                self?.cleanupConnection(id: connectionId)
                 continuation.resume(returning: false)
             }
         }

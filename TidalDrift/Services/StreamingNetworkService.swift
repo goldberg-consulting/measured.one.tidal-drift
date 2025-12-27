@@ -48,6 +48,10 @@ class StreamingNetworkService: ObservableObject {
     private let serviceDomain = "local."
     private let streamingPort: UInt16 = 5901
     
+    // Store active connections to prevent premature deallocation
+    private var activeConnections: [UUID: NWConnection] = [:]
+    private let connectionsLock = NSLock()
+    
     // Advertising
     @Published var isHosting = false
     @Published var hostedApps: [String] = []  // Bundle IDs of apps being shared
@@ -568,15 +572,45 @@ class StreamingNetworkService: ObservableObject {
         )
         
         let connection = NWConnection(to: endpoint, using: .tcp)
-        connection.stateUpdateHandler = { state in
-            if case .ready = state {
+        let connectionId = UUID()
+        
+        // Store connection to prevent premature deallocation
+        connectionsLock.lock()
+        activeConnections[connectionId] = connection
+        connectionsLock.unlock()
+        
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
                 let request = "FOCUS|\(app.bundleIdentifier)".data(using: .utf8)!
                 connection.send(content: request, completion: .contentProcessed { _ in
-                    connection.cancel()
+                    Task { @MainActor in
+                        self?.cleanupConnection(id: connectionId)
+                    }
                 })
+            case .failed:
+                Task { @MainActor in
+                    self?.cleanupConnection(id: connectionId)
+                }
+            case .cancelled:
+                Task { @MainActor in
+                    self?.connectionsLock.lock()
+                    self?.activeConnections.removeValue(forKey: connectionId)
+                    self?.connectionsLock.unlock()
+                }
+            default:
+                break
             }
         }
         connection.start(queue: queue)
+    }
+    
+    private func cleanupConnection(id: UUID) {
+        connectionsLock.lock()
+        if let connection = activeConnections[id] {
+            connection.cancel()
+        }
+        connectionsLock.unlock()
     }
 }
 

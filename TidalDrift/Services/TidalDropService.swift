@@ -42,6 +42,10 @@ class TidalDropService: ObservableObject {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.tidaldrift.drop", qos: .userInitiated)
     
+    // Store active connections to prevent premature deallocation
+    private var activeConnections: [UUID: NWConnection] = [:]
+    private let connectionsLock = NSLock()
+    
     private init() {
         startListening()
         requestNotificationPermission()
@@ -219,6 +223,12 @@ class TidalDropService: ObservableObject {
         
         let connection = NWConnection(to: endpoint, using: params)
         let transferId = UUID()
+        let connectionId = UUID()
+        
+        // Store connection to prevent premature deallocation
+        connectionsLock.lock()
+        activeConnections[connectionId] = connection
+        connectionsLock.unlock()
         
         let transfer = DropTransfer(
             id: transferId,
@@ -240,12 +250,17 @@ class TidalDropService: ObservableObject {
             switch state {
             case .ready:
                 didConnect = true
-                self?.performSendWithData(connection, transferId: transferId, name: fileName, size: Int64(fileData.count), fileData: fileData)
+                self?.performSendWithData(connection, transferId: transferId, name: fileName, size: Int64(fileData.count), fileData: fileData, connectionId: connectionId)
             case .failed(let error):
                 print("❌ TidalDrop: Fallback connection failed: \(error)")
+                self?.cleanupConnection(id: connectionId)
                 DispatchQueue.main.async {
                     self?.activeTransfers[transferId]?.status = .failed("Connection failed: \(error.localizedDescription)")
                 }
+            case .cancelled:
+                self?.connectionsLock.lock()
+                self?.activeConnections.removeValue(forKey: connectionId)
+                self?.connectionsLock.unlock()
             default:
                 break
             }
@@ -255,11 +270,19 @@ class TidalDropService: ObservableObject {
         
         queue.asyncAfter(deadline: .now() + 10.0) { [weak self] in
             guard !didConnect else { return }
-            connection.cancel()
+            self?.cleanupConnection(id: connectionId)
             DispatchQueue.main.async {
                 self?.activeTransfers[transferId]?.status = .failed("Connection timeout")
             }
         }
+    }
+    
+    private func cleanupConnection(id: UUID) {
+        connectionsLock.lock()
+        if let connection = activeConnections[id] {
+            connection.cancel()
+        }
+        connectionsLock.unlock()
     }
     
     private func notifyCompletion(fileName: String, isIncoming: Bool, viaMountedShare: Bool = false) {
@@ -479,6 +502,12 @@ class TidalDropService: ObservableObject {
         
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(ipAddress), port: 5902)
         let connection = NWConnection(to: endpoint, using: .tcp)
+        let connectionId = UUID()
+        
+        // Store connection to prevent premature deallocation
+        connectionsLock.lock()
+        activeConnections[connectionId] = connection
+        connectionsLock.unlock()
         
         let transferId = UUID()
         let name = url.lastPathComponent
@@ -506,12 +535,17 @@ class TidalDropService: ObservableObject {
             switch state {
             case .ready:
                 print("✅ TidalDrop: Connection ready, starting transfer")
-                self?.performSend(connection, transferId: transferId, url: url, name: name, size: size)
+                self?.performSend(connection, transferId: transferId, url: url, name: name, size: size, connectionId: connectionId)
             case .failed(let error):
                 print("❌ TidalDrop: Connection failed: \(error)")
+                self?.cleanupConnection(id: connectionId)
                 DispatchQueue.main.async {
                     self?.activeTransfers[transferId]?.status = .failed(error.localizedDescription)
                 }
+            case .cancelled:
+                self?.connectionsLock.lock()
+                self?.activeConnections.removeValue(forKey: connectionId)
+                self?.connectionsLock.unlock()
             case .waiting(let error):
                 print("⏳ TidalDrop: Connection waiting: \(error)")
             default:
@@ -521,20 +555,21 @@ class TidalDropService: ObservableObject {
         connection.start(queue: queue)
     }
     
-    private func performSend(_ connection: NWConnection, transferId: UUID, url: URL, name: String, size: Int64) {
+    private func performSend(_ connection: NWConnection, transferId: UUID, url: URL, name: String, size: Int64, connectionId: UUID) {
         // Read file data first
         guard let fileData = try? Data(contentsOf: url) else {
             print("❌ TidalDrop: Cannot read file for sending")
+            cleanupConnection(id: connectionId)
             DispatchQueue.main.async {
                 self.activeTransfers[transferId]?.status = .failed("Cannot read file")
             }
             return
         }
         
-        performSendWithData(connection, transferId: transferId, name: name, size: size, fileData: fileData)
+        performSendWithData(connection, transferId: transferId, name: name, size: size, fileData: fileData, connectionId: connectionId)
     }
     
-    private func performSendWithData(_ connection: NWConnection, transferId: UUID, name: String, size: Int64, fileData: Data) {
+    private func performSendWithData(_ connection: NWConnection, transferId: UUID, name: String, size: Int64, fileData: Data, connectionId: UUID) {
         DispatchQueue.main.async {
             self.activeTransfers[transferId]?.status = .transferring
         }
@@ -557,6 +592,7 @@ class TidalDropService: ObservableObject {
         connection.send(content: header, completion: .contentProcessed { [weak self] error in
             if let e = error {
                 print("❌ TidalDrop: Header send failed: \(e)")
+                self?.cleanupConnection(id: connectionId)
                 DispatchQueue.main.async { self?.activeTransfers[transferId]?.status = .failed(e.localizedDescription) }
                 return
             }
@@ -564,12 +600,13 @@ class TidalDropService: ObservableObject {
             connection.send(content: fileData, completion: .contentProcessed { [weak self] error in
                 if let e = error {
                     print("❌ TidalDrop: File send failed: \(e)")
+                    self?.cleanupConnection(id: connectionId)
                     DispatchQueue.main.async { self?.activeTransfers[transferId]?.status = .failed(e.localizedDescription) }
                 } else {
                     print("✅ TidalDrop: File sent successfully!")
                     DispatchQueue.main.async { self?.activeTransfers[transferId]?.progress = 1.0 }
                     self?.completeTransfer(transferId: transferId, fileName: name, isIncoming: false)
-                    connection.cancel()
+                    self?.cleanupConnection(id: connectionId)
                 }
             })
         })
