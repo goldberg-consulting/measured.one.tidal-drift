@@ -104,3 +104,7 @@ iOSInjectionProject/
 # Ignore duplicate app bundles
 TidalDrift/TidalDrift\ *.app/
 
+
+# Environment secrets
+.env
+*.env

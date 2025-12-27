@@ -34,9 +34,12 @@ struct TidalDriftApp: App {
                 .environmentObject(appState)
         }
         
-        MenuBarExtra("TidalDrift", systemImage: "network") {
+        MenuBarExtra {
             MenuBarView()
                 .environmentObject(appState)
+        } label: {
+            TidalDriftMenuBarIcon(size: 18)
+                .help("TidalDrift")
         }
         .menuBarExtraStyle(.window)
     }
