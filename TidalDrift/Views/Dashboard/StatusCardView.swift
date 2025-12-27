@@ -109,7 +109,7 @@ struct StatusCardView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("1.3.0")
+                Text(Bundle.main.appVersion)
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

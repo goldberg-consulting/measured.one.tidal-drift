@@ -101,13 +101,6 @@ struct DashboardView: View {
                 } label: {
                     Label("Add Device", systemImage: "plus")
                 }
-                
-                Button {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app"))
-                } label: {
-                    Label("iCloud Devices", systemImage: "icloud")
-                }
-                .help("Open Finder to see Macs on your iCloud account")
             }
             
             if !appState.connectionHistory.isEmpty {
@@ -165,6 +158,14 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(discoveryService.isScanningSubnet)
+                
+                // Add Device button - next to scan
+                Button {
+                    viewModel.showAddDeviceSheet = true
+                } label: {
+                    Label("Add Device", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
                 
                 Divider()
                     .frame(height: 20)

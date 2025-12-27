@@ -788,11 +788,37 @@ class NetworkDiscoveryService: ObservableObject {
         
         let totalIPs = hostsToScan.count
         
-        // Use class-based counter for Swift 6 concurrency safety
-        final class Counter: @unchecked Sendable {
-            var value: Int = 0
+        // Track which IPs responded during this scan
+        final class ScanTracker: @unchecked Sendable {
+            var scannedCount: Int = 0
+            var respondedIPs: Set<String> = []
+            let lock = NSLock()
+            
+            func addRespondedIP(_ ip: String) {
+                lock.lock()
+                respondedIPs.insert(ip)
+                lock.unlock()
+            }
+            
+            func incrementScanned() {
+                lock.lock()
+                scannedCount += 1
+                lock.unlock()
+            }
+            
+            func getScannedCount() -> Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return scannedCount
+            }
+            
+            func getRespondedIPs() -> Set<String> {
+                lock.lock()
+                defer { lock.unlock() }
+                return respondedIPs
+            }
         }
-        let scanned = Counter()
+        let tracker = ScanTracker()
         
         // Structure to hold scan results for an IP
         struct ScanResult: Sendable {
@@ -833,14 +859,15 @@ class NetworkDiscoveryService: ObservableObject {
                 }
                 
                 for await result in group {
-                    scanned.value += 1
+                    tracker.incrementScanned()
                     await MainActor.run {
-                        scanProgress = Double(scanned.value) / Double(totalIPs)
+                        scanProgress = Double(tracker.getScannedCount()) / Double(totalIPs)
                     }
                     
                     let hasAnyService = result.hasScreenSharing || result.hasFileSharing || result.hasAFP || result.hasSSH
                     
                     if hasAnyService {
+                        tracker.addRespondedIP(result.ip)
                         let name = self.getHostname(for: result.ip) ?? "Mac at \(result.ip)"
                         
                         await MainActor.run {
@@ -862,9 +889,48 @@ class NetworkDiscoveryService: ObservableObject {
             }
         }
         
+        // After scan completes, remove devices on this subnet that didn't respond
+        // (but keep TidalDrift peers and manually added devices)
+        let respondedIPs = tracker.getRespondedIPs()
         await MainActor.run {
+            removeUnresponsiveDevices(onSubnet: subnet, respondedIPs: respondedIPs)
             isScanningSubnet = false
             scanProgress = 1.0
+        }
+    }
+    
+    /// Remove devices on the given subnet that didn't respond during scan
+    /// Preserves TidalDrift peers (they're discovered via Bonjour, not port scan)
+    private func removeUnresponsiveDevices(onSubnet subnet: String, respondedIPs: Set<String>) {
+        var devicesToRemove: [String] = []
+        
+        for (ip, device) in deviceCache {
+            // Skip if not on the scanned subnet
+            guard ip.hasPrefix(subnet + ".") else { continue }
+            
+            // Skip TidalDrift peers - they may not have open ports but are valid
+            if device.isTidalDriftPeer { continue }
+            
+            // Skip if this IP responded during the scan
+            if respondedIPs.contains(ip) { continue }
+            
+            // This device is on our subnet but didn't respond - mark for removal
+            devicesToRemove.append(ip)
+        }
+        
+        // Remove unresponsive devices
+        for ip in devicesToRemove {
+            deviceCache.removeValue(forKey: ip)
+            #if DEBUG
+            print("🧹 Removed unresponsive device: \(ip)")
+            #endif
+        }
+        
+        if !devicesToRemove.isEmpty {
+            updatePublishedDevices()
+            #if DEBUG
+            print("🧹 Cleaned up \(devicesToRemove.count) devices that didn't respond during subnet scan")
+            #endif
         }
     }
     

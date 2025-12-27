@@ -256,3 +256,22 @@ struct NetworkUtils {
 }
 
 import CoreWLAN
+
+// MARK: - Bundle Extension for Version Info
+
+extension Bundle {
+    /// Returns the app version string (CFBundleShortVersionString)
+    var appVersion: String {
+        return infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+    
+    /// Returns the build number (CFBundleVersion)
+    var buildNumber: String {
+        return infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    }
+    
+    /// Returns a combined version string (e.g., "1.3.5 (9)")
+    var fullVersion: String {
+        return "\(appVersion) (\(buildNumber))"
+    }
+}

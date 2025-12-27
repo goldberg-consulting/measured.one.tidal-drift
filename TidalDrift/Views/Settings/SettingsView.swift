@@ -485,7 +485,7 @@ struct AboutView: View {
         VStack(spacing: 24) {
             TidalDriftLogo(size: .medium)
             
-            Text("Version 1.2.0")
+            Text("Version \(Bundle.main.appVersion)")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
             
