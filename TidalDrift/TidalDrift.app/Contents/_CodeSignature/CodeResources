@@ -62,6 +62,15 @@
 			D9Sbo8NYXHCWeOAEaoIcPGBoXscGNyDTDTo0SL46IIs=
 			</data>
 		</dict>
+		<key>TidalDrift.entitlements</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			E7kbFGkS0hyOZS0Me/TGXpSf7Go=
+			</data>
+			<key>requirement</key>
+			<string>identifier TidalDrift and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "97UY84BV45"</string>
+		</dict>
 	</dict>
 	<key>rules</key>
 	<dict>

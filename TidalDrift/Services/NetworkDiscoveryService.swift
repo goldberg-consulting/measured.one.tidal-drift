@@ -37,6 +37,9 @@ class NetworkDiscoveryService: ObservableObject {
     private init() {
         loadSavedDevices()
         
+        // Clean stale devices on startup (devices not seen in 5+ minutes)
+        clearStaleDevices()
+        
         // Defer network setup to avoid blocking on init
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             self?.setupNetworkMonitor()
@@ -164,16 +167,28 @@ class NetworkDiscoveryService: ObservableObject {
         saveDevices()
     }
     
-    /// Remove all non-TidalDrift devices (used before a fresh scan)
-    func clearNonPeerDevices() {
+    /// Clear all stale devices (not seen recently) - includes peers
+    /// Uses 2 minutes for TidalDrift peers, 5 minutes for other devices
+    func clearStaleDevices() {
+        let peerStaleThreshold: TimeInterval = 2 * 60 // 2 minutes for peers
+        let deviceStaleThreshold: TimeInterval = 5 * 60 // 5 minutes for other devices
+        
         deviceCacheLock.lock()
-        let nonPeerIPs = deviceCache.filter { !$0.value.isTidalDriftPeer }.map { $0.key }
-        for ip in nonPeerIPs {
+        let staleIPs = deviceCache.filter { entry in
+            let threshold = entry.value.isTidalDriftPeer ? peerStaleThreshold : deviceStaleThreshold
+            return Date().timeIntervalSince(entry.value.lastSeen) > threshold
+        }.map { $0.key }
+        
+        for ip in staleIPs {
             deviceCache.removeValue(forKey: ip)
         }
         deviceCacheLock.unlock()
-        updatePublishedDevices()
-        print("🧹 Cleared \(nonPeerIPs.count) non-peer devices for fresh scan")
+        
+        if !staleIPs.isEmpty {
+            updatePublishedDevices()
+            saveDevices()
+            print("🧹 Cleared \(staleIPs.count) stale devices on startup/scan")
+        }
     }
     
     /// Clear ALL devices and rediscover (full reset)
@@ -810,8 +825,8 @@ class NetworkDiscoveryService: ObservableObject {
             isScanningSubnet = true
             scanProgress = 0.01 // Show immediate progress
             
-            // Clear non-TidalDrift devices before scanning - fresh discovery
-            clearNonPeerDevices()
+            // Clear stale devices (including old peers) before fresh scan
+            clearStaleDevices()
         }
         
         // Parse base IP (e.g., "192.168.1" from "192.168.1.100")

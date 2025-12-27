@@ -256,14 +256,46 @@ struct DeviceCardView: View {
         }
     }
     
-    /// Clean up model name formatting issues (remove trailing backslashes, etc.)
+    /// Clean up model name and convert raw identifiers to friendly names
     private func cleanModelName(_ name: String) -> String {
         var cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        
         // Remove trailing backslash or other escape characters
         while cleaned.hasSuffix("\\") || cleaned.hasSuffix("/") {
             cleaned = String(cleaned.dropLast())
         }
+        
+        // Convert raw model identifiers to friendly names
+        // Format: "Mac17,2" or "MacBookPro18,1" etc.
+        if cleaned.hasPrefix("Mac") && cleaned.contains(",") {
+            // It's a raw identifier like "Mac17,2" - convert to friendly name
+            return friendlyModelName(from: cleaned)
+        }
+        
         return cleaned
+    }
+    
+    /// Convert raw model identifier to friendly name
+    private func friendlyModelName(from identifier: String) -> String {
+        let lower = identifier.lowercased()
+        
+        // Check for specific model families
+        if lower.contains("macbookpro") { return "MacBook Pro" }
+        if lower.contains("macbookair") { return "MacBook Air" }
+        if lower.contains("macbook") { return "MacBook" }
+        if lower.contains("imac") { return "iMac" }
+        if lower.contains("macmini") { return "Mac mini" }
+        if lower.contains("macpro") { return "Mac Pro" }
+        if lower.contains("macstudio") { return "Mac Studio" }
+        
+        // Generic Mac identifier (e.g., "Mac17,2" for Apple Silicon)
+        // These are typically MacBook Pro/Air on M-series chips
+        if identifier.hasPrefix("Mac") && identifier.contains(",") {
+            // Could be any Apple Silicon Mac - return generic
+            return "Mac"
+        }
+        
+        return identifier
     }
     
     private var serviceBadgeSection: some View {
