@@ -11,6 +11,7 @@ class NetworkDiscoveryService: ObservableObject {
     private var browsers: [NWBrowser] = []
     private var udpListener: NWListener?
     private var deviceCache: [String: DiscoveredDevice] = [:]
+    private let deviceCacheLock = NSLock()  // Thread-safe access to deviceCache
     private var scanTimer: Timer?
     private var pathMonitor: NWPathMonitor?
     private let queue = DispatchQueue(label: "com.tidaldrift.discovery", qos: .userInitiated)
@@ -88,9 +89,11 @@ class NetworkDiscoveryService: ObservableObject {
                 let devices = try JSONDecoder().decode([DiscoveredDevice].self, from: data)
                 
                 // Load into cache with IP as key
+                deviceCacheLock.lock()
                 for device in devices {
                     deviceCache[device.ipAddress] = device
                 }
+                deviceCacheLock.unlock()
                 
                 // Update published devices
                 discoveredDevices = devices.sorted { $0.name < $1.name }
@@ -113,8 +116,11 @@ class NetworkDiscoveryService: ObservableObject {
     
     /// Save current devices to storage
     private func saveDevices() {
+        deviceCacheLock.lock()
+        let devices = Array(deviceCache.values)
+        deviceCacheLock.unlock()
+        
         do {
-            let devices = Array(deviceCache.values)
             let data = try JSONEncoder().encode(devices)
             UserDefaults.standard.set(data, forKey: savedDevicesKey)
             
@@ -134,7 +140,9 @@ class NetworkDiscoveryService: ObservableObject {
     
     /// Clear all saved devices
     func clearSavedDevices() {
+        deviceCacheLock.lock()
         deviceCache.removeAll()
+        deviceCacheLock.unlock()
         discoveredDevices.removeAll()
         lastScanDate = nil
         UserDefaults.standard.removeObject(forKey: savedDevicesKey)
@@ -149,17 +157,21 @@ class NetworkDiscoveryService: ObservableObject {
     
     /// Remove a specific device by IP
     func removeDevice(ipAddress: String) {
+        deviceCacheLock.lock()
         deviceCache.removeValue(forKey: ipAddress)
+        deviceCacheLock.unlock()
         updatePublishedDevices()
         saveDevices()
     }
     
     /// Remove all stale devices
     func removeStaleDevices() {
+        deviceCacheLock.lock()
         let staleIPs = deviceCache.filter { isDeviceStale($0.value) }.map { $0.key }
         for ip in staleIPs {
             deviceCache.removeValue(forKey: ip)
         }
+        deviceCacheLock.unlock()
         updatePublishedDevices()
         saveDevices()
     }
@@ -245,6 +257,7 @@ class NetworkDiscoveryService: ObservableObject {
     func refreshScan() {
         stopBrowsing()
         
+        deviceCacheLock.lock()
         // Preserve TidalDrift peer info before clearing cache
         let tidalDriftPeers = deviceCache.filter { $0.value.isTidalDriftPeer }
         
@@ -254,6 +267,7 @@ class NetworkDiscoveryService: ObservableObject {
         for (key, device) in tidalDriftPeers {
             deviceCache[key] = device
         }
+        deviceCacheLock.unlock()
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.startBrowsing()
@@ -565,6 +579,7 @@ class NetworkDiscoveryService: ObservableObject {
         // Use IP as primary key to avoid duplicates
         let cacheKey = ipAddress
         
+        deviceCacheLock.lock()
         if var existingDevice = deviceCache[cacheKey] {
             existingDevice.lastSeen = Date()
             if let service = service {
@@ -592,6 +607,7 @@ class NetworkDiscoveryService: ObservableObject {
             )
             deviceCache[cacheKey] = newDevice
         }
+        deviceCacheLock.unlock()
         
         updatePublishedDevices()
     }
@@ -600,7 +616,9 @@ class NetworkDiscoveryService: ObservableObject {
         switch result.endpoint {
         case .service(let name, _, _, _):
             // Find and remove device by name match
+            deviceCacheLock.lock()
             deviceCache = deviceCache.filter { !$0.value.name.lowercased().contains(name.lowercased()) }
+            deviceCacheLock.unlock()
             updatePublishedDevices()
         default:
             break
@@ -608,7 +626,10 @@ class NetworkDiscoveryService: ObservableObject {
     }
     
     private func updatePublishedDevices() {
+        deviceCacheLock.lock()
         let devices = Array(deviceCache.values).sorted { $0.name < $1.name }
+        deviceCacheLock.unlock()
+        
         DispatchQueue.main.async {
             self.discoveredDevices = devices
             // Auto-save when devices change
@@ -627,7 +648,9 @@ class NetworkDiscoveryService: ObservableObject {
         )
         
         let cacheKey = ipAddress
+        deviceCacheLock.lock()
         deviceCache[cacheKey] = device
+        deviceCacheLock.unlock()
         updatePublishedDevices()
     }
     
@@ -639,6 +662,8 @@ class NetworkDiscoveryService: ObservableObject {
             // Normalize input hostname
             let inputHostname = hostname.lowercased().replacingOccurrences(of: ".local", with: "")
             let inputIP = peerInfo.ipAddress
+            
+            self.deviceCacheLock.lock()
             
             // Check cache directly first
             var matchedIP: String?
@@ -678,6 +703,7 @@ class NetworkDiscoveryService: ObservableObject {
                 }
                 
                 self.deviceCache[device.ipAddress] = device
+                self.deviceCacheLock.unlock()
                 print("🌊 TidalDrift PEER: ✅ Updated cache entry '\(device.name)' as peer")
             } else {
                 // Create a new device entry for this TidalDrift peer
@@ -699,6 +725,7 @@ class NetworkDiscoveryService: ObservableObject {
                     peerUptimeHours: peerInfo.uptimeHours
                 )
                 self.deviceCache[newDevice.ipAddress] = newDevice
+                self.deviceCacheLock.unlock()
                 print("🌊 TidalDrift PEER: ✅ Created new device entry for peer '\(displayName)'")
             }
             self.updatePublishedDevices()
@@ -904,6 +931,7 @@ class NetworkDiscoveryService: ObservableObject {
     private func removeUnresponsiveDevices(onSubnet subnet: String, respondedIPs: Set<String>) {
         var devicesToRemove: [String] = []
         
+        deviceCacheLock.lock()
         for (ip, device) in deviceCache {
             // Skip if not on the scanned subnet
             guard ip.hasPrefix(subnet + ".") else { continue }
@@ -925,6 +953,7 @@ class NetworkDiscoveryService: ObservableObject {
             print("🧹 Removed unresponsive device: \(ip)")
             #endif
         }
+        deviceCacheLock.unlock()
         
         if !devicesToRemove.isEmpty {
             updatePublishedDevices()
