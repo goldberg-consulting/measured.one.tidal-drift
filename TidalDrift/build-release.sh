@@ -21,7 +21,7 @@ set -e
 # Configuration
 APP_NAME="TidalDrift"
 BUNDLE_ID="com.goldbergconsulting.tidaldrift"
-VERSION="1.3.11"
+VERSION="1.3.12"
 DMG_NAME="${APP_NAME}-${VERSION}"
 
 # Load credentials from .env if it exists

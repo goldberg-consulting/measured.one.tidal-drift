@@ -6,11 +6,11 @@
 	<dict>
 		<key>Resources/AppIcon.icns</key>
 		<data>
-		DwKXpQmetPhJJRn4lRraVe7DamE=
+		cqBeap7MmvIplkFN4ga3M2mpxmI=
 		</data>
 		<key>Resources/TidalDrift_TidalDrift.bundle/AppIcon.icns</key>
 		<data>
-		DwKXpQmetPhJJRn4lRraVe7DamE=
+		cqBeap7MmvIplkFN4ga3M2mpxmI=
 		</data>
 		<key>Resources/TidalDrift_TidalDrift.bundle/Assets.xcassets/AccentColor.colorset/Contents.json</key>
 		<data>
@@ -31,14 +31,14 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			tm1aiShmGOROew3YQOyau4Uh2vC8+PHSadQyFAWAp4o=
+			jHZcR3nnU93YvRc9qm/9p3jo7AyBUUYDd9NNBdift0Q=
 			</data>
 		</dict>
 		<key>Resources/TidalDrift_TidalDrift.bundle/AppIcon.icns</key>
 		<dict>
 			<key>hash2</key>
 			<data>
-			tm1aiShmGOROew3YQOyau4Uh2vC8+PHSadQyFAWAp4o=
+			jHZcR3nnU93YvRc9qm/9p3jo7AyBUUYDd9NNBdift0Q=
 			</data>
 		</dict>
 		<key>Resources/TidalDrift_TidalDrift.bundle/Assets.xcassets/AccentColor.colorset/Contents.json</key>
@@ -61,15 +61,6 @@
 			<data>
 			D9Sbo8NYXHCWeOAEaoIcPGBoXscGNyDTDTo0SL46IIs=
 			</data>
-		</dict>
-		<key>TidalDrift.entitlements</key>
-		<dict>
-			<key>cdhash</key>
-			<data>
-			E7kbFGkS0hyOZS0Me/TGXpSf7Go=
-			</data>
-			<key>requirement</key>
-			<string>identifier TidalDrift and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "97UY84BV45"</string>
 		</dict>
 	</dict>
 	<key>rules</key>
