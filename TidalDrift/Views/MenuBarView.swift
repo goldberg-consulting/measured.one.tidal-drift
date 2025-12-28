@@ -3,6 +3,11 @@ import SwiftUI
 struct MenuBarView: View {
     @EnvironmentObject var appState: AppState
     
+    // Filter out the current device - only show other devices
+    private var otherDevices: [DiscoveredDevice] {
+        appState.discoveredDevices.filter { !$0.isCurrentDevice }
+    }
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             statusSection
@@ -52,18 +57,18 @@ struct MenuBarView: View {
                 .foregroundColor(.secondary)
                 .padding(.bottom, 4)
             
-            if appState.discoveredDevices.isEmpty {
+            if otherDevices.isEmpty {
                 Text("No devices found")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .padding(.vertical, 8)
             } else {
-                ForEach(appState.discoveredDevices.prefix(5)) { device in
+                ForEach(otherDevices.prefix(5)) { device in
                     MenuBarDeviceRow(device: device)
                 }
                 
-                if appState.discoveredDevices.count > 5 {
-                    Text("+ \(appState.discoveredDevices.count - 5) more")
+                if otherDevices.count > 5 {
+                    Text("+ \(otherDevices.count - 5) more")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.top, 4)
