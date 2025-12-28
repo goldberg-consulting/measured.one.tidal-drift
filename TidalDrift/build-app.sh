@@ -5,7 +5,7 @@
 # Requires: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
 set -e
-VERSION="1.3.14"
+VERSION="1.3.15"
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; NC='\033[0m'
 
 RUN_APP=true; [[ "$1" == "--no-run" ]] && RUN_APP=false

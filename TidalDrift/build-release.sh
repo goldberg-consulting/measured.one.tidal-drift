@@ -1,20 +1,14 @@
 #!/bin/bash
 
-# TidalDrift Release Builder
-# Creates a signed, notarized DMG for distribution
-#
+# TidalDrift Release Builder v1.3.15
 # Uses xcodebuild + ditto --norsrc to avoid resource fork issues
 # Requires: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-#
-# Usage:
-#   ./build-release.sh              # Build and notarize
-#   ./build-release.sh --skip-notarize  # Build only
 
 set -e
 
 APP_NAME="TidalDrift"
 BUNDLE_ID="com.goldbergconsulting.tidaldrift"
-VERSION="1.3.14"
+VERSION="1.3.15"
 DMG_NAME="${APP_NAME}-${VERSION}"
 
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -82,6 +76,10 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
 </dict></plist>
 EOF
 echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
+
+# CRITICAL: Remove FinderInfo xattr before signing (Finder adds this automatically)
+xattr -d com.apple.FinderInfo "$APP_BUNDLE" 2>/dev/null || true
+
 echo -e "${GREEN}✓ Bundle${NC}"
 
 # Sign
