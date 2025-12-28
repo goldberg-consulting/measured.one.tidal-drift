@@ -40,7 +40,7 @@ struct StreamingHost: Identifiable, Hashable {
 
 /// Service for advertising and discovering streaming apps via Bonjour
 @MainActor
-class StreamingNetworkService: ObservableObject {
+class StreamingNetworkService: ObservableObject, @unchecked Sendable {
     static let shared = StreamingNetworkService()
     
     // Bonjour service type for TidalDrift streaming
@@ -583,7 +583,7 @@ class StreamingNetworkService: ObservableObject {
             switch state {
             case .ready:
                 let request = "FOCUS|\(app.bundleIdentifier)".data(using: .utf8)!
-                connection.send(content: request, completion: .contentProcessed { _ in
+                connection.send(content: request, completion: .contentProcessed { [weak self] _ in
                     Task { @MainActor in
                         self?.cleanupConnection(id: connectionId)
                     }
@@ -594,9 +594,7 @@ class StreamingNetworkService: ObservableObject {
                 }
             case .cancelled:
                 Task { @MainActor in
-                    self?.connectionsLock.lock()
-                    self?.activeConnections.removeValue(forKey: connectionId)
-                    self?.connectionsLock.unlock()
+                    self?.cleanupConnection(id: connectionId)
                 }
             default:
                 break

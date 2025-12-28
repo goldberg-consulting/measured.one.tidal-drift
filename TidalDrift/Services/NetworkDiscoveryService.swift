@@ -2,7 +2,7 @@ import Foundation
 import Network
 import Combine
 
-class NetworkDiscoveryService: ObservableObject {
+class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
     static let shared = NetworkDiscoveryService()
     
     @Published var discoveredDevices: [DiscoveredDevice] = []

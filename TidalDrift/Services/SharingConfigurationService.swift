@@ -6,7 +6,7 @@ import os.log
 
 private let logger = Logger(subsystem: "com.tidaldrift", category: "SharingConfig")
 
-class SharingConfigurationService: ObservableObject {
+class SharingConfigurationService: ObservableObject, @unchecked Sendable {
     static let shared = SharingConfigurationService()
     
     @Published var screenSharingEnabled: Bool = false

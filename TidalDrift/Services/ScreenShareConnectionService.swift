@@ -60,7 +60,7 @@ enum ScreenShareMode {
     case observe
 }
 
-class ScreenShareConnectionService {
+class ScreenShareConnectionService: @unchecked Sendable {
     static let shared = ScreenShareConnectionService()
     
     // Store active connections to prevent premature deallocation

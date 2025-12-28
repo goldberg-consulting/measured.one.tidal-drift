@@ -252,13 +252,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         
         // Read output asynchronously
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            // Safely read available data (may throw if process terminated)
-            let data: Data
-            do {
-                data = handle.availableData
-            } catch {
-                return
-            }
+            let data = handle.availableData
             
             guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
                 return
@@ -358,13 +352,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         process.standardError = FileHandle.nullDevice
         
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            // Safely read available data
-            let data: Data
-            do {
-                data = handle.availableData
-            } catch {
-                return
-            }
+            let data = handle.availableData
             
             guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
                 return
@@ -491,13 +479,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             }
             self.lookupLock.unlock()
             
-            // Check if data is available (empty data means EOF/closed)
-            let data: Data
-            do {
-                data = handle.availableData
-            } catch {
-                return
-            }
+            let data = handle.availableData
             
             guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
                 return
