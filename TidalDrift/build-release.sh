@@ -15,7 +15,7 @@ set -e
 # Configuration
 APP_NAME="TidalDrift"
 BUNDLE_ID="com.goldbergconsulting.tidaldrift"
-VERSION="1.3.13"
+VERSION="1.3.14"
 DMG_NAME="${APP_NAME}-${VERSION}"
 
 # Colors
