@@ -38,7 +38,7 @@ struct TidalDriftApp: App {
             MenuBarView()
                 .environmentObject(appState)
         } label: {
-            TidalDriftMenuBarIcon(size: 18)
+            Text("TD").font(.system(size: 11, weight: .bold, design: .rounded))
                 .help("TidalDrift")
         }
         .menuBarExtraStyle(.window)
