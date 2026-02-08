@@ -2,6 +2,10 @@ import SwiftUI
 
 struct MenuBarView: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject private var localCast = LocalCastService.shared
+    @State private var isTogglingLocalCast = false
+    @State private var showPermissionAlert = false
+    @State private var permissionAlertMessage = ""
     
     // Filter out the current device - only show other devices
     private var otherDevices: [DiscoveredDevice] {
@@ -15,6 +19,11 @@ struct MenuBarView: View {
             Divider()
                 .padding(.vertical, 8)
             
+            localCastSection
+            
+            Divider()
+                .padding(.vertical, 8)
+            
             devicesSection
             
             Divider()
@@ -24,6 +33,92 @@ struct MenuBarView: View {
         }
         .padding(12)
         .frame(width: 280)
+    }
+    
+    private var localCastSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "bolt.fill")
+                    .foregroundColor(localCast.isHosting ? .yellow : .secondary)
+                Text("LocalCast Hosting")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Spacer()
+                
+                if isTogglingLocalCast {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 40)
+                } else {
+                    Toggle("", isOn: Binding(
+                        get: { localCast.isHosting },
+                        set: { newValue in
+                            isTogglingLocalCast = true
+                            Task {
+                                if newValue {
+                                    do {
+                                        print("🌊 MenuBar: Toggle ON - calling startHosting()")
+                                        try await localCast.startHosting()
+                                        print("🌊 MenuBar: startHosting() succeeded")
+                                    } catch let error as LocalCastError {
+                                        print("🌊 MenuBar: ❌ startHosting() failed: \(error)")
+                                        await MainActor.run {
+                                            permissionAlertMessage = error.errorDescription ?? "Failed to start LocalCast"
+                                            showPermissionAlert = true
+                                        }
+                                    } catch {
+                                        print("🌊 MenuBar: ❌ startHosting() failed: \(error)")
+                                        await MainActor.run {
+                                            permissionAlertMessage = error.localizedDescription
+                                            showPermissionAlert = true
+                                        }
+                                    }
+                                } else {
+                                    print("🌊 MenuBar: Toggle OFF - calling stopHosting()")
+                                    localCast.stopHosting()
+                                }
+                                await MainActor.run {
+                                    isTogglingLocalCast = false
+                                }
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .scaleEffect(0.7)
+                    .labelsHidden()
+                }
+            }
+            .alert("LocalCast Permission Required", isPresented: $showPermissionAlert) {
+                Button("Open System Settings") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text(permissionAlertMessage + "\n\nPlease grant Accessibility permission to TidalDrift, then try again.")
+            }
+            
+            if localCast.isHosting {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !localCast.activeConnections.isEmpty {
+                        ForEach(localCast.activeConnections) { conn in
+                            HStack {
+                                Image(systemName: "display")
+                                    .font(.caption)
+                                Text(conn.clientName)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    } else {
+                        Text("Waiting for connections...")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .italic()
+                    }
+                }
+                .padding(.leading, 24)
+            }
+        }
     }
     
     private var statusSection: some View {

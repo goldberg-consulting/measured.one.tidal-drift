@@ -56,11 +56,13 @@ struct AppSettings: Codable, Equatable {
         self.tidalDropDestination = tidalDropDestination
     }
     
-    /// Returns the TidalDrop destination folder, defaulting to ~/Downloads/TidalDrift
+    /// Returns the TidalDrop destination folder, defaulting to ~/Public/Drop Box
     var tidalDropFolder: URL {
         if tidalDropDestination.isEmpty {
-            return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("TidalDrift")
+            // Default to Public Drop Box which is standard for incoming files
+            return FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Public")
+                .appendingPathComponent("Drop Box")
         }
         return URL(fileURLWithPath: tidalDropDestination)
     }

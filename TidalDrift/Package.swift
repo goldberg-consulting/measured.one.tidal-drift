@@ -20,11 +20,16 @@ let package = Package(
                 "ViewModels", 
                 "Services",
                 "Models",
-                "Utilities"
+                "Utilities",
+                "LocalCast",
+                "Extensions"
             ],
             resources: [
                 .copy("Resources/AppIcon.icns"),
                 .process("Resources/Assets.xcassets")
+            ],
+            swiftSettings: [
+                .define("DEBUG", .when(configuration: .debug))
             ]
         )
     ]

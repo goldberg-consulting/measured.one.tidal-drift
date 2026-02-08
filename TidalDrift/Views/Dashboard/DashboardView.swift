@@ -2,9 +2,6 @@ import SwiftUI
 
 enum DashboardSection: String, CaseIterable {
     case devices = "Devices"
-    case appStreaming = "App Streaming"
-    case clipboardSync = "Clipboard Sync"
-    case troubleshooting = "Troubleshooting"
 }
 
 struct DashboardView: View {
@@ -40,16 +37,7 @@ struct DashboardView: View {
     
     @ViewBuilder
     private var detailContent: some View {
-        switch selectedSection {
-        case .devices:
-            mainContent
-        case .appStreaming:
-            AppStreamingTabView()
-        case .clipboardSync:
-            ClipboardSyncTabView()
-        case .troubleshooting:
-            TroubleshootingView()
-        }
+        mainContent
     }
     
     private var sidebarContent: some View {
@@ -58,49 +46,9 @@ struct DashboardView: View {
                 StatusCardView()
             }
             
-            Section("Navigation") {
+            Section {
                 Label("Devices", systemImage: "desktopcomputer")
                     .tag(DashboardSection.devices)
-                
-                Label("Troubleshooting", systemImage: "wrench.and.screwdriver")
-                    .tag(DashboardSection.troubleshooting)
-            }
-            
-            // Only show experimental features if enabled in settings
-            if appState.settings.showExperimentalFeatures {
-                Section("Experimental") {
-                    HStack {
-                        Label("App Streaming", systemImage: "app.connected.to.app.below.fill")
-                        Spacer()
-                        Text("β")
-                            .font(.caption2)
-                            .fontWeight(.bold)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.orange))
-                            .foregroundColor(.white)
-                    }
-                    .tag(DashboardSection.appStreaming)
-                    
-                    HStack {
-                        Label("Clipboard Sync", systemImage: "doc.on.clipboard")
-                        Spacer()
-                        if ClipboardSyncService.shared.isEnabled {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 8, height: 8)
-                        }
-                    }
-                    .tag(DashboardSection.clipboardSync)
-                }
-            }
-            
-            Section("Quick Actions") {
-                Button {
-                    viewModel.showAddDeviceSheet = true
-                } label: {
-                    Label("Add Device", systemImage: "plus")
-                }
             }
             
             if !appState.connectionHistory.isEmpty {

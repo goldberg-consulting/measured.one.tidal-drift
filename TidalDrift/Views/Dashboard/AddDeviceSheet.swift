@@ -21,6 +21,10 @@ struct AddDeviceSheet: View {
             
             scanSection
             
+            #if DEBUG
+            loopbackSection
+            #endif
+            
             if let error = validationError {
                 errorView(error)
             }
@@ -175,6 +179,36 @@ struct AddDeviceSheet: View {
         )
     }
     
+    private var loopbackSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Development")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Button {
+                NetworkDiscoveryService.shared.addManualDevice(
+                    name: "Loopback (This Mac)",
+                    ipAddress: "127.0.0.1",
+                    port: Int(LocalCastConfiguration.hostPort),
+                    services: [.screenSharing, .localCast]
+                )
+                dismiss()
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Text("Add Loopback Device")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.purple.opacity(0.1))
+        )
+    }
+
     private var buttons: some View {
         HStack {
             Button("Cancel") {

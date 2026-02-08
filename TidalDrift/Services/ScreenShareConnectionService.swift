@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Network
+import OSLog
 
 enum ConnectionError: LocalizedError {
     case invalidAddress
@@ -10,6 +11,7 @@ enum ConnectionError: LocalizedError {
     case scriptError(String)
     case screenSharingNotPermitted(String) // The "sticky" macOS bug
     case remoteServiceDown
+    case resolutionFailed(String)
     case unknown(Error)
     
     var errorDescription: String? {
@@ -28,6 +30,8 @@ enum ConnectionError: LocalizedError {
             return "Screen Sharing not permitted on \(ip). The remote machine needs to restart its Screen Sharing service."
         case .remoteServiceDown:
             return "Remote Screen Sharing service is not running"
+        case .resolutionFailed(let reason):
+            return "Could not resolve device address: \(reason)"
         case .unknown(let error):
             return error.localizedDescription
         }
@@ -49,6 +53,8 @@ enum ConnectionError: LocalizedError {
             """
         case .remoteServiceDown:
             return "Enable Screen Sharing on the remote machine in System Settings → General → Sharing"
+        case .resolutionFailed:
+            return "The device may have changed IP address or be offline. Try refreshing the device list."
         default:
             return nil
         }
@@ -63,6 +69,8 @@ enum ScreenShareMode {
 class ScreenShareConnectionService: @unchecked Sendable {
     static let shared = ScreenShareConnectionService()
     
+    private let logger = Logger(subsystem: "com.tidaldrift", category: "ScreenShareConnection")
+    
     // Store active connections to prevent premature deallocation
     private var activeConnections: [UUID: NWConnection] = [:]
     private let connectionsLock = NSLock()
@@ -70,23 +78,54 @@ class ScreenShareConnectionService: @unchecked Sendable {
     private init() {}
     
     func connect(to device: DiscoveredDevice, mode: ScreenShareMode = .control, username: String? = nil, password: String? = nil) async throws {
-        // If we have both username and password, use AppleScript to connect with credentials
+        logger.info("🔌 Connecting to '\(device.name)'...")
+        
+        // Step 1: Resolve the best address using hostname-first strategy
+        // This handles stale IPs and DHCP changes automatically
+        let resolved: ConnectionResolver.ResolvedAddress
+        do {
+            resolved = try await ConnectionResolver.shared.resolve(
+                device: device,
+                strategy: .hostnameFirst,
+                timeout: 10.0
+            )
+            logger.info("🔌 Resolved address: \(resolved.address) via \(resolved.method.rawValue)")
+        } catch let error as ConnectionResolver.ResolutionError {
+            logger.error("🔌 Resolution failed: \(error.localizedDescription)")
+            throw ConnectionError.resolutionFailed(error.localizedDescription)
+        }
+        
+        // Step 2: Connect using the resolved address
         if let username = username, !username.isEmpty,
            let password = password, !password.isEmpty {
-            try await connectWithCredentials(to: device.ipAddress, port: device.port, username: username, password: password)
+            try await connectWithCredentials(to: resolved.address, port: resolved.port, username: username, password: password)
         } else {
-            // Otherwise, just open the VNC URL and let Screen Sharing handle auth
-            let urlString: String
-            
-            if let username = username, !username.isEmpty {
-                urlString = "vnc://\(username)@\(device.ipAddress):\(device.port)"
+            // Build VNC URL - prefer hostname.local if available for continued mDNS resolution
+            let connectionAddress: String
+            if let hostname = resolved.hostname, resolved.method == .mDNSHostname {
+                // Use the .local hostname for the VNC URL - this allows Screen Sharing
+                // to benefit from continued mDNS resolution during the session
+                let cleanHost = hostname.hasSuffix(".local") ? hostname : "\(hostname).local"
+                connectionAddress = cleanHost
+                logger.info("🔌 Using hostname for VNC URL: \(cleanHost)")
             } else {
-                urlString = "vnc://\(device.ipAddress):\(device.port)"
+                connectionAddress = resolved.address
+                logger.info("🔌 Using IP for VNC URL: \(resolved.address)")
+            }
+            
+            let urlString: String
+            if let username = username, !username.isEmpty {
+                let escapedUser = username.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? username
+                urlString = "vnc://\(escapedUser)@\(connectionAddress):\(resolved.port)"
+            } else {
+                urlString = "vnc://\(connectionAddress):\(resolved.port)"
             }
             
             guard let url = URL(string: urlString) else {
                 throw ConnectionError.invalidAddress
             }
+            
+            logger.info("🔌 Opening VNC URL: \(urlString.replacingOccurrences(of: "vnc://", with: "vnc://[redacted]@").components(separatedBy: "@").last ?? "...")")
             
             let success = await MainActor.run {
                 NSWorkspace.shared.open(url)
@@ -99,9 +138,14 @@ class ScreenShareConnectionService: @unchecked Sendable {
     }
     
     /// Connect using AppleScript to pass credentials directly to Screen Sharing
-    private func connectWithCredentials(to ipAddress: String, port: Int, username: String, password: String) async throws {
-        // Validate IP address format to prevent injection
-        guard isValidIPAddress(ipAddress) else {
+    /// - Parameters:
+    ///   - address: IP address or hostname.local
+    ///   - port: VNC port (typically 5900)
+    ///   - username: Username for authentication
+    ///   - password: Password for authentication
+    private func connectWithCredentials(to address: String, port: Int, username: String, password: String) async throws {
+        // Validate address format to prevent injection
+        guard isValidAddress(address) else {
             throw ConnectionError.invalidAddress
         }
         
@@ -110,7 +154,9 @@ class ScreenShareConnectionService: @unchecked Sendable {
         let escapedPassword = escapeForAppleScript(password)
         
         // Build VNC URL with properly escaped credentials
-        let vncURL = "vnc://\(escapedUsername):\(escapedPassword)@\(ipAddress):\(port)"
+        let vncURL = "vnc://\(escapedUsername):\(escapedPassword)@\(address):\(port)"
+        
+        logger.info("🔌 Connecting with credentials to \(address):\(port)")
         
         // Use AppleScript to open the connection
         let script = """
@@ -133,9 +179,10 @@ class ScreenShareConnectionService: @unchecked Sendable {
         }
         
         if !result.0 {
+            logger.warning("🔌 AppleScript connection failed, falling back to URL method")
             // Fall back to URL method (without password - macOS will prompt)
             let escapedUsernameForURL = username.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? username
-            let urlString = "vnc://\(escapedUsernameForURL)@\(ipAddress):\(port)"
+            let urlString = "vnc://\(escapedUsernameForURL)@\(address):\(port)"
             guard let url = URL(string: urlString) else {
                 throw ConnectionError.invalidAddress
             }
@@ -148,6 +195,19 @@ class ScreenShareConnectionService: @unchecked Sendable {
                 throw ConnectionError.connectionFailed
             }
         }
+    }
+    
+    /// Validate address format (IP or hostname)
+    private func isValidAddress(_ address: String) -> Bool {
+        // Allow .local hostnames
+        if address.hasSuffix(".local") {
+            // Basic hostname validation - alphanumeric, hyphens, dots
+            let validChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-."))
+            return address.unicodeScalars.allSatisfy { validChars.contains($0) }
+        }
+        
+        // IP address validation
+        return isValidIPAddress(address)
     }
     
     /// Validate IP address format
@@ -182,13 +242,45 @@ class ScreenShareConnectionService: @unchecked Sendable {
     }
     
     func connectToFileShare(device: DiscoveredDevice, username: String? = nil) async throws {
-        let urlString: String
-        
-        if let username = username {
-            urlString = "smb://\(username)@\(device.ipAddress)"
-        } else {
-            urlString = "smb://\(device.ipAddress)"
+        // Check if already mounted
+        if let mountedURL = findMountedShare(for: device) {
+            logger.info("📁 File Share: Already mounted at \(mountedURL.path), opening in Finder")
+            await MainActor.run {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: mountedURL.path)
+            }
+            return
         }
+        
+        // Resolve address using hostname-first strategy
+        let resolved: ConnectionResolver.ResolvedAddress
+        do {
+            resolved = try await ConnectionResolver.shared.resolve(
+                device: device,
+                strategy: .hostnameFirst,
+                timeout: 10.0
+            )
+        } catch let error as ConnectionResolver.ResolutionError {
+            throw ConnectionError.resolutionFailed(error.localizedDescription)
+        }
+        
+        // Use hostname.local for SMB if available (better for macOS file sharing)
+        let connectionAddress: String
+        if let hostname = resolved.hostname, resolved.method == .mDNSHostname {
+            let cleanHost = hostname.hasSuffix(".local") ? hostname : "\(hostname).local"
+            connectionAddress = cleanHost
+        } else {
+            connectionAddress = resolved.address
+        }
+        
+        let urlString: String
+        if let username = username {
+            let escapedUser = username.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? username
+            urlString = "smb://\(escapedUser)@\(connectionAddress)"
+        } else {
+            urlString = "smb://\(connectionAddress)"
+        }
+        
+        logger.info("📁 Connecting to file share: \(connectionAddress)")
         
         guard let url = URL(string: urlString) else {
             throw ConnectionError.invalidAddress
@@ -204,13 +296,45 @@ class ScreenShareConnectionService: @unchecked Sendable {
     }
     
     func connectToAFP(device: DiscoveredDevice, username: String? = nil) async throws {
-        let urlString: String
-        
-        if let username = username {
-            urlString = "afp://\(username)@\(device.ipAddress)"
-        } else {
-            urlString = "afp://\(device.ipAddress)"
+        // Check if already mounted
+        if let mountedURL = findMountedShare(for: device) {
+            logger.info("📁 AFP: Already mounted at \(mountedURL.path), opening in Finder")
+            await MainActor.run {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: mountedURL.path)
+            }
+            return
         }
+        
+        // Resolve address using hostname-first strategy
+        let resolved: ConnectionResolver.ResolvedAddress
+        do {
+            resolved = try await ConnectionResolver.shared.resolve(
+                device: device,
+                strategy: .hostnameFirst,
+                timeout: 10.0
+            )
+        } catch let error as ConnectionResolver.ResolutionError {
+            throw ConnectionError.resolutionFailed(error.localizedDescription)
+        }
+        
+        // Use hostname.local for AFP if available
+        let connectionAddress: String
+        if let hostname = resolved.hostname, resolved.method == .mDNSHostname {
+            let cleanHost = hostname.hasSuffix(".local") ? hostname : "\(hostname).local"
+            connectionAddress = cleanHost
+        } else {
+            connectionAddress = resolved.address
+        }
+        
+        let urlString: String
+        if let username = username {
+            let escapedUser = username.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? username
+            urlString = "afp://\(escapedUser)@\(connectionAddress)"
+        } else {
+            urlString = "afp://\(connectionAddress)"
+        }
+        
+        logger.info("📁 Connecting to AFP share: \(connectionAddress)")
         
         guard let url = URL(string: urlString) else {
             throw ConnectionError.invalidAddress
@@ -225,93 +349,123 @@ class ScreenShareConnectionService: @unchecked Sendable {
         }
     }
     
-    func connectToSSH(device: DiscoveredDevice, username: String? = nil) {
-        let user = username ?? NSUserName()
-        let host = device.ipAddress
+    /// Finds a mounted network share that belongs to the target device
+    private func findMountedShare(for device: DiscoveredDevice) -> URL? {
+        let volumesPath = URL(fileURLWithPath: "/Volumes")
         
-        print("🔌 SSH: Connecting to \(user)@\(host)")
-        
-        // Guard against invalid host
-        guard !host.isEmpty, host != "Unknown" else {
-            print("❌ SSH: Invalid host address: \(host)")
-            return
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: volumesPath,
+            includingPropertiesForKeys: [.volumeIsRemovableKey, .volumeURLForRemountingKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
         }
         
-        // Use Process to run osascript for more reliable Terminal control
-        let sshCommand = "ssh -o StrictHostKeyChecking=accept-new \(user)@\(host)"
+        // Look for network volumes that might match the device
+        for volumeURL in contents {
+            // Check if it's a network volume
+            if let remountURL = try? volumeURL.resourceValues(forKeys: [.volumeURLForRemountingKey]).volumeURLForRemounting,
+               let host = remountURL.host {
+                // Match by IP address or hostname
+                let hostLower = host.lowercased()
+                let deviceHost = device.hostname.lowercased().replacingOccurrences(of: ".local", with: "")
+                let deviceName = device.name.lowercased()
+                
+                if host == device.ipAddress ||
+                   hostLower == deviceHost ||
+                   hostLower.contains(deviceName) ||
+                   deviceName.contains(hostLower) {
+                    return volumeURL
+                }
+            }
+        }
         
-        let appleScript = """
-        tell application "Terminal"
-            activate
-            set newWindow to do script "\(sshCommand)"
-            set current settings of newWindow to settings set "Basic"
-        end tell
-        """
+        return nil
+    }
+    
+    func connectToSSH(device: DiscoveredDevice, username: String? = nil) {
+        let user = username ?? NSUserName()
         
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", appleScript]
+        logger.info("🔌 SSH: Preparing connection to '\(device.name)'")
         
-        do {
-            try process.run()
-            print("✅ SSH: Terminal launched for \(user)@\(host)")
-        } catch {
-            print("❌ SSH: Failed to launch Terminal: \(error)")
+        // Use async task to resolve address
+        Task {
+            let host: String
+            do {
+                // Try to resolve using hostname-first strategy
+                let resolved = try await ConnectionResolver.shared.resolve(
+                    device: device,
+                    strategy: .hostnameFirst,
+                    timeout: 5.0
+                )
+                // Use hostname.local for SSH if available (more reliable)
+                if let hostname = resolved.hostname, resolved.method == .mDNSHostname {
+                    host = hostname.hasSuffix(".local") ? hostname : "\(hostname).local"
+                } else {
+                    host = resolved.address
+                }
+                logger.info("🔌 SSH: Resolved host: \(host)")
+            } catch {
+                // Fall back to cached IP
+                host = device.ipAddress
+                logger.warning("🔌 SSH: Resolution failed, using cached IP: \(host)")
+            }
             
-            // Fallback: try opening terminal URL
-            if let url = URL(string: "ssh://\(user)@\(host)") {
-                NSWorkspace.shared.open(url)
+            // Guard against invalid host
+            guard !host.isEmpty, host != "Unknown", host != "Resolving..." else {
+                logger.error("❌ SSH: Invalid host address: \(host)")
+                return
+            }
+            
+            // Use Process to run osascript for more reliable Terminal control
+            let sshCommand = "ssh -o StrictHostKeyChecking=accept-new \(user)@\(host)"
+            
+            let appleScript = """
+            tell application "Terminal"
+                activate
+                set newWindow to do script "\(sshCommand)"
+                set current settings of newWindow to settings set "Basic"
+            end tell
+            """
+            
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", appleScript]
+            
+            do {
+                try process.run()
+                logger.info("✅ SSH: Terminal launched for \(user)@\(host)")
+            } catch {
+                logger.error("❌ SSH: Failed to launch Terminal: \(error)")
+                
+                // Fallback: try opening terminal URL
+                await MainActor.run {
+                    if let url = URL(string: "ssh://\(user)@\(host)") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
             }
         }
     }
     
+    /// Test connection to a specific address and port
     func testConnection(to ipAddress: String, port: Int = 5900) async -> Bool {
-        return await withCheckedContinuation { continuation in
-            let host = NWEndpoint.Host(ipAddress)
-            let port = NWEndpoint.Port(rawValue: UInt16(port))!
-            let connection = NWConnection(host: host, port: port, using: .tcp)
-            let connectionId = UUID()
-            
-            // Store connection to prevent premature deallocation
-            self.connectionsLock.lock()
-            self.activeConnections[connectionId] = connection
-            self.connectionsLock.unlock()
-            
-            let didResume = AtomicFlag()
-            
-            connection.stateUpdateHandler = { [weak self] state in
-                switch state {
-                case .ready:
-                    guard !didResume.value else { return }
-                    didResume.value = true
-                    self?.cleanupConnection(id: connectionId)
-                    continuation.resume(returning: true)
-                case .failed:
-                    guard !didResume.value else { return }
-                    didResume.value = true
-                    self?.cleanupConnection(id: connectionId)
-                    continuation.resume(returning: false)
-                case .cancelled:
-                    self?.connectionsLock.lock()
-                    self?.activeConnections.removeValue(forKey: connectionId)
-                    self?.connectionsLock.unlock()
-                    
-                    guard !didResume.value else { return }
-                    didResume.value = true
-                    continuation.resume(returning: false)
-                default:
-                    break
-                }
-            }
-            
-            connection.start(queue: .global())
-            
-            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak self] in
-                guard !didResume.value else { return }
-                didResume.value = true
-                self?.cleanupConnection(id: connectionId)
-                continuation.resume(returning: false)
-            }
+        return await ConnectionResolver.shared.testConnection(address: ipAddress, port: port, timeout: 5.0)
+    }
+    
+    /// Test connection to a device using smart resolution
+    func testConnectionToDevice(_ device: DiscoveredDevice) async -> Bool {
+        do {
+            _ = try await ConnectionResolver.shared.resolve(
+                device: device,
+                strategy: .hostnameFirst,
+                timeout: 8.0
+            )
+            // If we successfully resolved, the device is reachable
+            return true
+        } catch {
+            logger.warning("🔌 Connection test failed for '\(device.name)': \(error.localizedDescription)")
+            return false
         }
     }
     

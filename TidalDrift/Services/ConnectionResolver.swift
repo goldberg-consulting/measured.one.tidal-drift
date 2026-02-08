@@ -1,0 +1,323 @@
+import Foundation
+import Network
+import OSLog
+
+/// Provides robust network address resolution for device connections.
+/// Prefers mDNS hostname resolution over cached IPs for reliability.
+///
+/// The key insight is that Bonjour/mDNS maintains current hostname-to-IP mappings
+/// via multicast DNS, so `hostname.local` always resolves to the current IP,
+/// whereas cached IPs can become stale due to DHCP lease changes.
+actor ConnectionResolver {
+    static let shared = ConnectionResolver()
+    
+    private let logger = Logger(subsystem: "com.tidaldrift", category: "ConnectionResolver")
+    
+    /// Resolution strategy - determines the order of resolution attempts
+    enum ResolutionStrategy {
+        case hostnameFirst    // Prefer .local hostname (most reliable)
+        case ipFirst          // Try cached IP first (faster if valid)
+        case hostnameOnly     // Only use hostname resolution
+        case ipOnly           // Only use cached IP
+    }
+    
+    /// Result of address resolution
+    struct ResolvedAddress: Sendable {
+        let address: String           // The resolved IP address or hostname
+        let port: Int
+        let method: ResolutionMethod  // How this address was resolved
+        let hostname: String?         // The original hostname (if available)
+        
+        /// Construct a VNC URL for this resolved address
+        var vncURL: URL? {
+            URL(string: "vnc://\(address):\(port)")
+        }
+        
+        /// Construct a VNC URL with credentials
+        func vncURL(username: String?, password: String?) -> URL? {
+            var urlString = "vnc://"
+            
+            if let username = username, !username.isEmpty {
+                let escapedUser = username.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? username
+                urlString += escapedUser
+                
+                if let password = password, !password.isEmpty {
+                    let escapedPass = password.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? password
+                    urlString += ":\(escapedPass)"
+                }
+                urlString += "@"
+            }
+            
+            urlString += "\(address):\(port)"
+            return URL(string: urlString)
+        }
+    }
+    
+    enum ResolutionMethod: String {
+        case mDNSHostname = "mDNS"      // Resolved via .local hostname
+        case cachedIP = "CachedIP"       // Used cached IP directly
+        case freshIPLookup = "IPLookup"  // Re-resolved IP via getaddrinfo
+    }
+    
+    enum ResolutionError: LocalizedError {
+        case allMethodsFailed(attempts: [String])
+        case timeout
+        case invalidDevice
+        
+        var errorDescription: String? {
+            switch self {
+            case .allMethodsFailed(let attempts):
+                return "Failed to resolve address. Tried: \(attempts.joined(separator: ", "))"
+            case .timeout:
+                return "Address resolution timed out"
+            case .invalidDevice:
+                return "Invalid device information"
+            }
+        }
+    }
+    
+    private init() {}
+    
+    // MARK: - Public API
+    
+    /// Resolve the best address for connecting to a device
+    /// - Parameters:
+    ///   - device: The device to connect to
+    ///   - strategy: Resolution strategy (default: hostnameFirst)
+    ///   - timeout: Maximum time to spend resolving (default: 10 seconds)
+    /// - Returns: A resolved address ready for connection
+    func resolve(
+        device: DiscoveredDevice,
+        strategy: ResolutionStrategy = .hostnameFirst,
+        timeout: TimeInterval = 10.0
+    ) async throws -> ResolvedAddress {
+        logger.info("🔍 Resolving address for '\(device.name)' using strategy: \(String(describing: strategy))")
+        logger.info("🔍 Device info - hostname: \(device.hostname), ip: \(device.ipAddress), port: \(device.port)")
+        
+        var failedAttempts: [String] = []
+        
+        switch strategy {
+        case .hostnameFirst:
+            // Strategy 1: Try mDNS hostname first (most reliable)
+            if let resolved = await tryHostnameResolution(device: device, timeout: timeout / 3) {
+                logger.info("✅ Resolved via mDNS hostname: \(resolved.address)")
+                return resolved
+            }
+            failedAttempts.append("mDNS hostname")
+            
+            // Strategy 2: Try fresh IP lookup via getaddrinfo
+            if let resolved = await tryFreshIPLookup(device: device, timeout: timeout / 3) {
+                logger.info("✅ Resolved via fresh IP lookup: \(resolved.address)")
+                return resolved
+            }
+            failedAttempts.append("Fresh IP lookup")
+            
+            // Strategy 3: Fall back to cached IP (verify connectivity)
+            if let resolved = await tryCachedIP(device: device, timeout: timeout / 3) {
+                logger.info("✅ Using verified cached IP: \(resolved.address)")
+                return resolved
+            }
+            failedAttempts.append("Cached IP")
+            
+        case .ipFirst:
+            // Try cached IP first for speed
+            if let resolved = await tryCachedIP(device: device, timeout: timeout / 3) {
+                return resolved
+            }
+            failedAttempts.append("Cached IP")
+            
+            // Fall back to hostname resolution
+            if let resolved = await tryHostnameResolution(device: device, timeout: timeout * 2 / 3) {
+                return resolved
+            }
+            failedAttempts.append("mDNS hostname")
+            
+        case .hostnameOnly:
+            if let resolved = await tryHostnameResolution(device: device, timeout: timeout) {
+                return resolved
+            }
+            failedAttempts.append("mDNS hostname (only method)")
+            
+        case .ipOnly:
+            if let resolved = await tryCachedIP(device: device, timeout: timeout) {
+                return resolved
+            }
+            failedAttempts.append("Cached IP (only method)")
+        }
+        
+        logger.error("❌ All resolution methods failed for '\(device.name)'")
+        throw ResolutionError.allMethodsFailed(attempts: failedAttempts)
+    }
+    
+    /// Quick connection test to verify an address is reachable
+    func testConnection(address: String, port: Int, timeout: TimeInterval = 3.0) async -> Bool {
+        return await withCheckedContinuation { continuation in
+            let host = NWEndpoint.Host(address)
+            let portEndpoint = NWEndpoint.Port(rawValue: UInt16(port))!
+            let connection = NWConnection(host: host, port: portEndpoint, using: .tcp)
+            
+            let didResume = AtomicFlag()
+            
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    guard !didResume.value else { return }
+                    didResume.value = true
+                    connection.cancel()
+                    continuation.resume(returning: true)
+                case .failed, .cancelled:
+                    guard !didResume.value else { return }
+                    didResume.value = true
+                    continuation.resume(returning: false)
+                default:
+                    break
+                }
+            }
+            
+            connection.start(queue: .global(qos: .userInitiated))
+            
+            // Timeout
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                guard !didResume.value else { return }
+                didResume.value = true
+                connection.cancel()
+                continuation.resume(returning: false)
+            }
+        }
+    }
+    
+    // MARK: - Private Resolution Methods
+    
+    /// Try to resolve via mDNS hostname (.local)
+    private func tryHostnameResolution(device: DiscoveredDevice, timeout: TimeInterval) async -> ResolvedAddress? {
+        // Build the .local hostname
+        let hostname = cleanHostname(device.hostname)
+        guard !hostname.isEmpty else { return nil }
+        
+        let localHostname = hostname.hasSuffix(".local") ? hostname : "\(hostname).local"
+        logger.debug("🔍 Trying mDNS resolution: \(localHostname)")
+        
+        // Use getaddrinfo which respects mDNS
+        return await resolveHostnameToIP(localHostname, port: device.port, timeout: timeout)
+    }
+    
+    /// Try fresh IP lookup via getaddrinfo (bypasses cache)
+    private func tryFreshIPLookup(device: DiscoveredDevice, timeout: TimeInterval) async -> ResolvedAddress? {
+        let hostname = cleanHostname(device.hostname)
+        guard !hostname.isEmpty else { return nil }
+        
+        let localHostname = hostname.hasSuffix(".local") ? hostname : "\(hostname).local"
+        logger.debug("🔍 Trying fresh IP lookup for: \(localHostname)")
+        
+        return await resolveHostnameToIP(localHostname, port: device.port, timeout: timeout)
+    }
+    
+    /// Try using cached IP address after verifying connectivity
+    private func tryCachedIP(device: DiscoveredDevice, timeout: TimeInterval) async -> ResolvedAddress? {
+        let ip = device.ipAddress
+        guard !ip.isEmpty, ip != "Unknown", ip != "Resolving..." else { return nil }
+        
+        logger.debug("🔍 Verifying cached IP: \(ip):\(device.port)")
+        
+        // Quick connectivity test
+        let reachable = await testConnection(address: ip, port: device.port, timeout: min(timeout, 2.0))
+        
+        if reachable {
+            return ResolvedAddress(
+                address: ip,
+                port: device.port,
+                method: .cachedIP,
+                hostname: device.hostname
+            )
+        }
+        
+        logger.debug("⚠️ Cached IP \(ip) is not reachable")
+        return nil
+    }
+    
+    /// Resolve hostname to IP using getaddrinfo
+    private func resolveHostnameToIP(_ hostname: String, port: Int, timeout: TimeInterval) async -> ResolvedAddress? {
+        return await withTaskGroup(of: ResolvedAddress?.self) { group in
+            group.addTask {
+                return await self.performGetaddrinfo(hostname: hostname, port: port)
+            }
+            
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return nil // Timeout sentinel
+            }
+            
+            for await result in group {
+                if let resolved = result {
+                    group.cancelAll()
+                    return resolved
+                }
+            }
+            
+            return nil
+        }
+    }
+    
+    /// Actual getaddrinfo call
+    private func performGetaddrinfo(hostname: String, port: Int) async -> ResolvedAddress? {
+        var hints = addrinfo()
+        hints.ai_family = AF_INET // IPv4
+        hints.ai_socktype = SOCK_STREAM
+        hints.ai_flags = 0 // Allow mDNS resolution
+        
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(hostname, nil, &hints, &result)
+        
+        defer {
+            if result != nil {
+                freeaddrinfo(result)
+            }
+        }
+        
+        guard status == 0, let addrInfo = result else {
+            logger.debug("⚠️ getaddrinfo failed for \(hostname): \(String(cString: gai_strerror(status)))")
+            return nil
+        }
+        
+        // Extract IPv4 address
+        if let sockaddr = addrInfo.pointee.ai_addr {
+            var ipBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            sockaddr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { addr in
+                var sin_addr = addr.pointee.sin_addr
+                inet_ntop(AF_INET, &sin_addr, &ipBuffer, socklen_t(INET_ADDRSTRLEN))
+            }
+            
+            let ip = String(cString: ipBuffer)
+            if !ip.isEmpty && ip != "0.0.0.0" {
+                logger.debug("✅ Resolved \(hostname) -> \(ip)")
+                
+                return ResolvedAddress(
+                    address: ip,
+                    port: port,
+                    method: .mDNSHostname,
+                    hostname: hostname
+                )
+            }
+        }
+        
+        return nil
+    }
+    
+    /// Clean up hostname for resolution
+    private func cleanHostname(_ hostname: String) -> String {
+        // Remove trailing periods and normalize
+        var clean = hostname.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        
+        // Handle cases where hostname might be an IP
+        if NetworkUtils.isValidIPAddress(clean) {
+            return ""
+        }
+        
+        // Remove .local. suffix variations
+        if clean.hasSuffix(".local.") {
+            clean = String(clean.dropLast(7)) + ".local"
+        }
+        
+        return clean
+    }
+}

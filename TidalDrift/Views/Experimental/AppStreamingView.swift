@@ -462,6 +462,39 @@ struct AppStreamingView: View {
             
             // Actions
             VStack(spacing: 12) {
+                // Stream button - main action
+                if service.isStreaming {
+                    Button {
+                        Task {
+                            await service.stopCapture()
+                        }
+                    } label: {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .frame(width: 16, height: 16)
+                            Text("Stop Streaming")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                } else {
+                    Button {
+                        Task {
+                            do {
+                                try await service.startCapture()
+                            } catch {
+                                print("❌ Failed to start streaming: \(error)")
+                            }
+                        }
+                    } label: {
+                        Label("Start Streaming Window", systemImage: "antenna.radiowaves.left.and.right")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                
                 Button {
                     service.bringAppToFront()
                 } label: {
@@ -470,10 +503,21 @@ struct AppStreamingView: View {
                 }
                 .buttonStyle(.bordered)
                 
-                Text("When others connect, they'll see this app")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+                if service.isStreaming {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 8, height: 8)
+                        Text("Streaming - connect from another Mac via LocalCast")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    }
+                } else {
+                    Text("Select a window above, then click 'Start Streaming'")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
             .padding()
         }

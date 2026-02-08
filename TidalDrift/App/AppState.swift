@@ -21,6 +21,9 @@ class AppState: ObservableObject {
     @Published var localIPAddress: String = "Unknown"
     @Published var computerName: String = NetworkUtils.computerName
     
+    // TidalDrop listening status
+    @Published var tidalDropListening: Bool = false
+    
     private var cancellables = Set<AnyCancellable>()
     
     private init() {
@@ -29,6 +32,24 @@ class AppState: ObservableObject {
         
         setupBindings()
         refreshLocalInfo()
+        
+        // Defer TidalDrop initialization to next run loop cycle
+        // to avoid circular dependency deadlock during AppState.shared init
+        DispatchQueue.main.async {
+            self.initializeTidalDrop()
+        }
+    }
+    
+    private func initializeTidalDrop() {
+        // Access the singleton to trigger init() which starts the listener
+        let dropService = TidalDropService.shared
+        
+        // Observe listening status
+        dropService.$isListening
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$tidalDropListening)
+        
+        print("🌊 TidalDrop: Service initialized, isListening: \(dropService.isListening)")
     }
     
     private func setupBindings() {

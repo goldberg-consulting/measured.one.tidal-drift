@@ -1,14 +1,17 @@
 import Foundation
 import Network
 import Combine
+import OSLog
 
-class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
+class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
+    private let logger = Logger(subsystem: "com.tidaldrift", category: "Discovery")
     static let shared = NetworkDiscoveryService()
     
     @Published var discoveredDevices: [DiscoveredDevice] = []
     @Published var lastScanDate: Date?
     
     private var browsers: [NWBrowser] = []
+    private var netServiceBrowser: NetServiceBrowser?
     private var udpListener: NWListener?
     private var deviceCache: [String: DiscoveredDevice] = [:]
     private let deviceCacheLock = NSLock()  // Thread-safe access to deviceCache
@@ -31,10 +34,12 @@ class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
         "_afpovertcp._tcp",    // AFP (Apple Filing Protocol)
         "_ssh._tcp",           // SSH
         "_tidaldrift._tcp",    // TidalDrift Discovery
-        "_tidaldrop._tcp"      // TidalDrop Transfer
+        "_tidaldrop._tcp",     // TidalDrop Transfer
+        "_tidaldrift-cast._udp" // LocalCast Transfer
     ]
     
-    private init() {
+    private override init() {
+        super.init()
         loadSavedDevices()
         
         // Clean stale devices on startup (devices not seen in 5+ minutes)
@@ -221,6 +226,12 @@ class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
         guard browsers.isEmpty else { return }
         
         for serviceType in serviceTypes {
+            // Skip UDP services in NWBrowser - use NetServiceBrowser instead
+            if serviceType.contains("_udp") {
+                logger.info("🌊 Skipping \(serviceType) for NWBrowser - will use NetServiceBrowser")
+                continue
+            }
+            
             // Use parameters that enable better discovery
             let params = NWParameters()
             params.includePeerToPeer = true
@@ -243,11 +254,113 @@ class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
             }
         }
         
+        // Use NetServiceBrowser for LocalCast (UDP) - more reliable
+        startNetServiceBrowserForLocalCast()
+        
         lastScanDate = Date()
         
         // Also do an initial ARP scan to find devices that might not advertise services
         Task {
             await scanARPTable()
+        }
+    }
+    
+    /// Use dns-sd command for UDP service discovery (more reliable than NWBrowser/NetServiceBrowser for UDP)
+    private var dnsSdBrowseProcess: Process?
+    
+    private func startNetServiceBrowserForLocalCast() {
+        logger.info("🌊 Starting dns-sd browse for _tidaldrift-cast._udp")
+        
+        // Use dns-sd -B to browse for services
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/dns-sd")
+        process.arguments = ["-B", "_tidaldrift-cast._udp", "local."]
+        
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        
+        dnsSdBrowseProcess = process
+        
+        // Read output asynchronously
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
+            
+            self?.parseDnsSdBrowseOutput(output)
+        }
+        
+        do {
+            try process.run()
+            logger.info("🌊 dns-sd browse started (PID: \(process.processIdentifier))")
+        } catch {
+            logger.error("🌊 Failed to start dns-sd browse: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Parse dns-sd -B output to find LocalCast services
+    private func parseDnsSdBrowseOutput(_ output: String) {
+        // dns-sd -B output format:
+        // Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
+        // 21:46:09.297  Add        3   1 local.               _tidaldrift-cast._udp. Eli's-MacBook-Pro
+        
+        let lines = output.split(separator: "\n")
+        for line in lines {
+            let lineStr = String(line)
+            
+            // Skip header lines
+            if lineStr.contains("Timestamp") || lineStr.contains("STARTING") || lineStr.contains("DATE:") || lineStr.contains("Browsing for") {
+                continue
+            }
+            
+            // Look for "Add" lines
+            if lineStr.contains("Add") && lineStr.contains("_tidaldrift-cast") {
+                // Extract the instance name (everything after the service type)
+                if let range = lineStr.range(of: "_tidaldrift-cast._udp.") {
+                    let instanceName = String(lineStr[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if !instanceName.isEmpty {
+                        logger.info("🌊 dns-sd found LocalCast service: '\(instanceName)'")
+                        
+                        // Try to match by name and resolve
+                        DispatchQueue.main.async { [weak self] in
+                            self?.markDeviceAsLocalCastHost(name: instanceName)
+                        }
+                        
+                        // Also resolve via dns-sd -L
+                        resolveLocalCastViaDnsSd(name: instanceName)
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Resolve a LocalCast service using dns-sd -L
+    private func resolveLocalCastViaDnsSd(name: String) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Use dns-sd -L to lookup the service (with timeout)
+            let result = ShellExecutor.execute("timeout 5 dns-sd -L '\(name)' _tidaldrift-cast._udp local. 2>&1 | head -20")
+            
+            self.logger.debug("dns-sd -L output for '\(name)': \(result.output)")
+            
+            // Parse output for hostname - look for "can be reached at" or hostname.local.:port
+            let lines = result.output.split(separator: "\n")
+            for line in lines {
+                let lineStr = String(line)
+                
+                // Look for hostname pattern like "hostname.local.:5904"
+                if lineStr.contains(".local.") {
+                    // Extract hostname using regex
+                    if let hostMatch = lineStr.range(of: "[a-zA-Z0-9\\-]+\\.local\\.", options: .regularExpression) {
+                        var hostname = String(lineStr[hostMatch])
+                        hostname = hostname.replacingOccurrences(of: ".local.", with: "")
+                        
+                        self.logger.info("🌊 dns-sd resolved '\(name)' to hostname: \(hostname)")
+                        self.resolveHostnameAndMarkLocalCast(hostname, originalName: name)
+                    }
+                }
+            }
         }
     }
     
@@ -280,6 +393,17 @@ class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
     func stopBrowsing() {
         browsers.forEach { $0.cancel() }
         browsers.removeAll()
+        
+        // Also stop dns-sd browse for LocalCast
+        if let process = dnsSdBrowseProcess, process.isRunning {
+            process.terminate()
+        }
+        dnsSdBrowseProcess = nil
+        
+        // Also stop NetServiceBrowser for LocalCast
+        netServiceBrowser?.stop()
+        netServiceBrowser = nil
+        discoveredLocalCastServices.removeAll()
     }
     
     func refreshScan() {
@@ -327,22 +451,36 @@ class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
     
     private func handleBrowserState(_ state: NWBrowser.State, for serviceType: String) {
         switch state {
-        case .ready, .cancelled:
+        case .ready:
+            if serviceType.contains("cast") {
+                logger.info("🌊 LocalCast browser READY for \(serviceType)")
+            }
+        case .cancelled:
             break
         case .failed(let error):
-            #if DEBUG
-            print("Browser failed for \(serviceType): \(error)")
-            #endif
+            logger.error("Browser failed for \(serviceType): \(error.localizedDescription)")
         default:
             break
         }
     }
     
     private func handleBrowseResults(_ results: Set<NWBrowser.Result>, changes: Set<NWBrowser.Result.Change>, serviceType: String) {
+        let isLocalCastService = serviceType.contains("cast") || serviceType.contains("_tidaldrift-cast")
+        
+        if isLocalCastService {
+            logger.info("🌊 LocalCast browse: \(results.count) services found for \(serviceType)")
+        }
+        
         for result in results {
             switch result.endpoint {
             case .service(let name, let type, let domain, _):
-                resolveService(name: name, type: type, domain: domain, serviceType: serviceType)
+                if isLocalCastService || type.contains("cast") {
+                    logger.info("🌊 LocalCast found: '\(name)' type:\(type) domain:\(domain)")
+                    // For LocalCast (UDP), resolve via dns-sd and mark device
+                    resolveLocalCastService(name: name, type: type, domain: domain)
+                } else {
+                    resolveService(name: name, type: type, domain: domain, serviceType: serviceType)
+                }
             default:
                 break
             }
@@ -358,10 +496,172 @@ class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
         }
     }
     
+    /// Resolve LocalCast service using dns-sd command (more reliable for UDP)
+    private func resolveLocalCastService(name: String, type: String, domain: String) {
+        logger.info("🌊 Resolving LocalCast: '\(name)'")
+        
+        // First try to match by name to existing devices
+        markDeviceAsLocalCastHost(name: name)
+        
+        // Also resolve via dns-sd to get the IP directly
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Use dns-sd -L to lookup the service
+            let result = ShellExecutor.execute("timeout 3 dns-sd -L '\(name)' \(type) \(domain) 2>&1 | head -10")
+            
+            // Parse output for host info - look for "can be reached at" or hostname
+            let lines = result.output.split(separator: "\n")
+            for line in lines {
+                let lineStr = String(line)
+                self.logger.debug("dns-sd output: \(lineStr)")
+                
+                // Look for hostname pattern like "hostname.local.:5904"
+                if lineStr.contains(".local.") || lineStr.contains("can be reached at") {
+                    // Extract hostname
+                    if let hostMatch = lineStr.range(of: "[a-zA-Z0-9-]+\\.local\\.", options: .regularExpression) {
+                        let hostname = String(lineStr[hostMatch]).replacingOccurrences(of: ".local.", with: "")
+                        self.logger.info("🌊 LocalCast hostname: \(hostname)")
+                        
+                        // Resolve hostname to IP
+                        self.resolveHostnameAndMarkLocalCast(hostname, originalName: name)
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Resolve hostname to IP and mark device as LocalCast host
+    private func resolveHostnameAndMarkLocalCast(_ hostname: String, originalName: String) {
+        let cleanHostname = hostname.hasSuffix(".local") ? hostname : "\(hostname).local"
+        
+        var hints = addrinfo()
+        hints.ai_family = AF_INET // IPv4
+        hints.ai_socktype = SOCK_STREAM
+        
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(cleanHostname, nil, &hints, &result)
+        
+        defer { if result != nil { freeaddrinfo(result) } }
+        
+        guard status == 0, let addrInfo = result else {
+            logger.warning("🌊 LocalCast: Failed to resolve hostname \(hostname)")
+            return
+        }
+        
+        var addr = addrInfo.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+        var ipBuffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        inet_ntop(AF_INET, &addr.sin_addr, &ipBuffer, socklen_t(INET_ADDRSTRLEN))
+        let ipAddress = String(cString: ipBuffer)
+        
+        logger.info("🌊 LocalCast resolved: \(hostname) -> \(ipAddress)")
+        
+        // Mark device at this IP as LocalCast host
+        DispatchQueue.main.async { [weak self] in
+            self?.addLocalCastToDevice(ipAddress: ipAddress, name: originalName)
+        }
+    }
+    
+    /// Add LocalCast service to a device by IP address
+    private func addLocalCastToDevice(ipAddress: String, name: String) {
+        deviceCacheLock.lock()
+        
+        if var device = deviceCache[ipAddress] {
+            if !device.services.contains(.localCast) {
+                device.services.insert(.localCast)
+                deviceCache[ipAddress] = device
+                logger.info("🌊 ✅ Added LocalCast to existing device: \(device.name) at \(ipAddress)")
+            }
+        } else {
+            // Create new device entry for this LocalCast host
+            let displayName = name.replacingOccurrences(of: "-", with: " ")
+            let newDevice = DiscoveredDevice(
+                name: displayName,
+                hostname: "\(name).local",
+                ipAddress: ipAddress,
+                services: [.localCast],
+                lastSeen: Date()
+            )
+            deviceCache[ipAddress] = newDevice
+            logger.info("🌊 ✅ Created new LocalCast device: \(displayName) at \(ipAddress)")
+        }
+        
+        deviceCacheLock.unlock()
+        updatePublishedDevices()
+    }
+    
+    /// Normalize a name for comparison (removes special chars, lowercases, etc)
+    private func normalizeName(_ name: String) -> String {
+        return name.lowercased()
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: ".local", with: "")
+            .trimmingCharacters(in: .whitespaces)
+            .components(separatedBy: .whitespaces)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+    
+    /// Mark a device as supporting LocalCast based on its advertised name
+    private func markDeviceAsLocalCastHost(name: String) {
+        let normalizedName = normalizeName(name)
+        
+        deviceCacheLock.lock()
+        var foundMatch = false
+        
+        // Log all devices in cache for debugging
+        logger.info("🌊 LocalCast matching: Looking for '\(name)' (normalized: '\(normalizedName)')")
+        logger.info("🌊 LocalCast matching: Cache has \(self.deviceCache.count) devices:")
+        for (ip, device) in deviceCache {
+            let normalizedDeviceName = normalizeName(device.name)
+            let normalizedHostName = normalizeName(device.hostname)
+            logger.info("🌊   - '\(device.name)' (\(ip)) [normalized: '\(normalizedDeviceName)', host: '\(normalizedHostName)']")
+        }
+        
+        // Find device by name match
+        for (ip, var device) in deviceCache {
+            let normalizedDeviceName = normalizeName(device.name)
+            let normalizedHostName = normalizeName(device.hostname)
+            
+            // Check for match (exact or substring)
+            let isMatch = normalizedDeviceName == normalizedName ||
+                         normalizedHostName == normalizedName ||
+                         normalizedDeviceName.contains(normalizedName) ||
+                         normalizedName.contains(normalizedDeviceName) ||
+                         normalizedHostName.contains(normalizedName) ||
+                         normalizedName.contains(normalizedHostName)
+            
+            if isMatch {
+                if !device.services.contains(.localCast) {
+                    device.services.insert(.localCast)
+                    deviceCache[ip] = device
+                    logger.info("🌊 ✅ Marked '\(device.name)' at \(ip) as LocalCast host (name match)")
+                }
+                foundMatch = true
+            }
+        }
+        
+        deviceCacheLock.unlock()
+        
+        if foundMatch {
+            DispatchQueue.main.async { [weak self] in
+                self?.updatePublishedDevices()
+            }
+        } else {
+            logger.warning("🌊 No device match for LocalCast name: '\(name)' - will try to resolve hostname")
+        }
+    }
+    
     private func resolveService(name: String, type: String, domain: String, serviceType: String) {
         // Method 1: Use NWConnection to resolve
-        let params = NWParameters.tcp
+        // Use UDP parameters for UDP services, TCP for others
+        let isUDPService = type.contains("_udp")
+        let params = isUDPService ? NWParameters.udp : NWParameters.tcp
         params.includePeerToPeer = true
+        
+        print("🌊 Discovery: Resolving \(name) type:\(type) (UDP: \(isUDPService))")
         
         let endpoint = NWEndpoint.service(name: name, type: type, domain: domain, interface: nil)
         let connection = NWConnection(to: endpoint, using: params)
@@ -585,33 +885,45 @@ class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
     }
     
     private func mapServiceType(_ type: String) -> DiscoveredDevice.ServiceType? {
+        let service: DiscoveredDevice.ServiceType?
         switch type {
         case "_rfb._tcp", "_rfb._tcp.":
-            return .screenSharing
+            service = .screenSharing
         case "_smb._tcp", "_smb._tcp.":
-            return .fileSharing
+            service = .fileSharing
         case "_afpovertcp._tcp", "_afpovertcp._tcp.":
-            return .afp
+            service = .afp
         case "_ssh._tcp", "_ssh._tcp.":
-            return .ssh
+            service = .ssh
         case "_tidaldrift._tcp", "_tidaldrift._tcp.":
-            return .tidalDrift
+            service = .tidalDrift
         case "_tidaldrop._tcp", "_tidaldrop._tcp.":
-            return .tidalDrop
+            service = .tidalDrop
+        case "_tidaldrift-cast._udp", "_tidaldrift-cast._udp.":
+            print("🌊 Discovery: Found LocalCast service!")
+            service = .localCast
         default:
-            return nil
+            service = nil
         }
+        return service
     }
     
     private func addOrUpdateDevice(name: String, ipAddress: String, port: Int, service: DiscoveredDevice.ServiceType?) {
         // Use IP as primary key to avoid duplicates
         let cacheKey = ipAddress
         
+        if service == .localCast {
+            print("🌊 Discovery: Adding LocalCast service for \(name) at \(ipAddress)")
+        }
+        
         deviceCacheLock.lock()
         if var existingDevice = deviceCache[cacheKey] {
             existingDevice.lastSeen = Date()
             if let service = service {
-                existingDevice.services.insert(service)
+                let wasAdded = existingDevice.services.insert(service).inserted
+                if service == .localCast && wasAdded {
+                    print("🌊 Discovery: ✅ LocalCast added to existing device \(existingDevice.name)")
+                }
             }
             // Prefer more descriptive names over generic ones
             if existingDevice.name.hasPrefix("Mac at ") && !name.hasPrefix("Mac at ") {
@@ -665,12 +977,12 @@ class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
         }
     }
     
-    func addManualDevice(name: String, ipAddress: String, port: Int = 5900) {
+    func addManualDevice(name: String, ipAddress: String, port: Int = 5900, services: Set<DiscoveredDevice.ServiceType> = [.screenSharing]) {
         let device = DiscoveredDevice(
             name: name,
             hostname: ipAddress,
             ipAddress: ipAddress,
-            services: [.screenSharing],
+            services: services,
             lastSeen: Date(),
             port: port
         )
@@ -1060,6 +1372,98 @@ class NetworkDiscoveryService: ObservableObject, @unchecked Sendable {
                 return name.replacingOccurrences(of: ".local", with: "")
             }
         }
+        return nil
+    }
+    
+    // MARK: - NetServiceBrowserDelegate (for LocalCast UDP discovery)
+    
+    private var discoveredLocalCastServices: [NetService] = []
+    
+    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
+        logger.info("🌊 NetServiceBrowser: Started searching for LocalCast services")
+    }
+    
+    func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
+        logger.info("🌊 NetServiceBrowser: Stopped searching")
+    }
+    
+    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
+        logger.error("🌊 NetServiceBrowser: Failed to search - \(errorDict)")
+    }
+    
+    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        logger.info("🌊 NetServiceBrowser: Found LocalCast service '\(service.name)' type:\(service.type)")
+        
+        // Store and resolve the service
+        discoveredLocalCastServices.append(service)
+        service.delegate = self
+        service.resolve(withTimeout: 10.0)
+        
+        // Also try to match by name immediately
+        markDeviceAsLocalCastHost(name: service.name)
+    }
+    
+    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        logger.info("🌊 NetServiceBrowser: LocalCast service removed '\(service.name)'")
+        discoveredLocalCastServices.removeAll { $0.name == service.name }
+        
+        // TODO: Could remove LocalCast capability from device, but leave for now
+    }
+    
+    // MARK: - NetServiceDelegate (for LocalCast service resolution)
+    
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        logger.info("🌊 NetService: Resolved '\(sender.name)' - host: \(sender.hostName ?? "nil"), port: \(sender.port)")
+        
+        // Get IP addresses from the resolved addresses
+        if let addresses = sender.addresses {
+            for addressData in addresses {
+                if let ipAddress = extractIPAddress(from: addressData) {
+                    logger.info("🌊 NetService: LocalCast '\(sender.name)' at IP: \(ipAddress)")
+                    
+                    DispatchQueue.main.async { [weak self] in
+                        self?.addLocalCastToDevice(ipAddress: ipAddress, name: sender.name)
+                    }
+                }
+            }
+        }
+        
+        // Also try hostname resolution
+        if let hostname = sender.hostName?.replacingOccurrences(of: ".local.", with: "") {
+            resolveHostnameAndMarkLocalCast(hostname, originalName: sender.name)
+        }
+    }
+    
+    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
+        logger.error("🌊 NetService: Failed to resolve '\(sender.name)' - \(errorDict)")
+    }
+    
+    /// Extract IPv4 address from sockaddr data
+    private func extractIPAddress(from addressData: Data) -> String? {
+        var storage = sockaddr_storage()
+        addressData.withUnsafeBytes { bytes in
+            let sockaddrPointer = bytes.baseAddress?.assumingMemoryBound(to: sockaddr.self)
+            if let sockaddr = sockaddrPointer {
+                memcpy(&storage, sockaddr, min(addressData.count, MemoryLayout<sockaddr_storage>.size))
+            }
+        }
+        
+        // Check for IPv4
+        if storage.ss_family == UInt8(AF_INET) {
+            var addr = withUnsafePointer(to: &storage) {
+                $0.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+            }
+            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            inet_ntop(AF_INET, &addr.sin_addr, &buffer, socklen_t(INET_ADDRSTRLEN))
+            let ip = String(cString: buffer)
+            
+            // Skip localhost
+            if ip.hasPrefix("127.") {
+                return nil
+            }
+            return ip
+        }
+        
         return nil
     }
 }

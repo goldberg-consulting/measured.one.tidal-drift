@@ -81,54 +81,56 @@ struct DeviceCardView: View {
         }
     }
     
+    private func startLocalCast() {
+        Task {
+            do {
+                let viewer = try await LocalCastService.shared.connect(to: device)
+                await MainActor.run {
+                    viewer.showWindow(nil)
+                }
+            } catch {
+                print("❌ LocalCast: Connection failed, falling back to VNC: \(error.localizedDescription)")
+                onTap() // Fallback to standard VNC
+            }
+        }
+    }
+    
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { 
-            print("🌊 TidalDrop: No provider in drop")
-            return false 
-        }
+        guard let provider = providers.first else { return false }
         
-        // Check if device has valid IP
-        guard !device.ipAddress.isEmpty, device.ipAddress != "Unknown" else {
-            print("🌊 TidalDrop: Invalid IP address: \(device.ipAddress)")
-            return false
-        }
+        print("🌊 TidalDrop: Processing drop to \(device.name)")
         
-        print("🌊 TidalDrop: Processing drop to \(device.name) at \(device.ipAddress)")
-        
-        // Use loadItem for file URLs (more reliable than loadObject)
-        provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, error in
+        provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { (item, error) in
             if let error = error {
-                print("🌊 TidalDrop: Load error: \(error)")
+                print("🌊 TidalDrop: Load error: \(error.localizedDescription)")
                 return
             }
             
-            var fileURL: URL?
+            let url: URL? = item as? URL ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
             
-            // Handle different item types
-            if let url = item as? URL {
-                fileURL = url
-            } else if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
-                fileURL = url
+            guard let fileURL = url else {
+                print("🌊 TidalDrop: Could not extract URL from dropped item")
+                return
             }
             
-            if let url = fileURL {
-                // Check if it's a directory
-                var isDirectory: ObjCBool = false
-                FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
-                
+            // Start accessing security scoped resource
+            let didStartAccess = fileURL.startAccessingSecurityScopedResource()
+            
+            var isDirectory: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory)
+            
+            if exists {
                 if isDirectory.boolValue {
-                    print("🌊 TidalDrop: Folder detected: \(url.lastPathComponent)")
-                    // For folders, send each file individually
-                    self.sendFolder(at: url)
+                    self.sendFolder(at: fileURL)
                 } else {
-                    print("🌊 TidalDrop: Sending \(url.lastPathComponent) to \(self.device.name)")
                     DispatchQueue.main.async {
-                        // Use smart send - tries mounted shares first, falls back to peer-to-peer
-                        TidalDropService.shared.smartSendFile(at: url, to: self.device)
+                        TidalDropService.shared.smartSendFile(at: fileURL, to: self.device)
                     }
                 }
-            } else {
-                print("🌊 TidalDrop: Could not extract URL from dropped item")
+            }
+            
+            if didStartAccess {
+                fileURL.stopAccessingSecurityScopedResource()
             }
         }
         return true
@@ -397,18 +399,25 @@ struct DeviceCardView: View {
     
     private var actionButtonsSection: some View {
         VStack(spacing: 6) {
-            Button(action: { onTap() }) {
+            Button(action: { 
+                if device.supportsLocalCast {
+                    startLocalCast()
+                } else {
+                    onTap() 
+                }
+            }) {
                 HStack(spacing: 4) {
-                    Image(systemName: device.isTidalDriftPeer ? "macwindow.on.rectangle" : "link")
-                    Text(device.isTidalDriftPeer ? "SCREEN SHARE" : "CONNECT")
+                    Image(systemName: device.supportsLocalCast ? "bolt.fill" : (device.isTidalDriftPeer ? "macwindow.on.rectangle" : "link"))
+                    Text(device.supportsLocalCast ? "LOCALCAST" : (device.isTidalDriftPeer ? "SCREEN SHARE" : "CONNECT"))
                 }
                 .font(.system(size: 9, weight: .bold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
-                .background(Capsule().fill(device.isTidalDriftPeer ? Color.tidalDriftPeer : Color.accentColor))
-                .foregroundColor(.white)
+                .background(Capsule().fill(device.supportsLocalCast ? Color.yellow : (device.isTidalDriftPeer ? Color.tidalDriftPeer : Color.accentColor)))
+                .foregroundColor(device.supportsLocalCast ? .black : .white)
             }
             .buttonStyle(.plain)
+            .help(device.supportsLocalCast ? "Low-latency screen sharing" : "Standard screen sharing")
             
             HStack(spacing: 6) {
                 if device.isTidalDriftPeer || device.services.contains(.ssh) {

@@ -10,6 +10,11 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
             
+            LocalCastSettingsView()
+                .tabItem {
+                    Label("LocalCast", systemImage: "bolt.fill")
+                }
+            
             NetworkSettingsView()
                 .tabItem {
                     Label("Network", systemImage: "network")
