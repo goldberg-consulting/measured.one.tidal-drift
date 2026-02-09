@@ -24,6 +24,14 @@ class VideoDecoder {
     private var frameCount = 0
     private var hasLoggedFirstFrame = false
     
+    deinit {
+        // SAFETY: The VTDecompressionSession callback holds an unretained pointer
+        // to self. Invalidate before deallocation to prevent use-after-free.
+        if let session = decompressionSession {
+            VTDecompressionSessionInvalidate(session)
+        }
+    }
+    
     func decode(_ data: Data) {
         // Log incoming data for debugging
         if frameCount == 0 {

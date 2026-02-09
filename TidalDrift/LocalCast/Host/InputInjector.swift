@@ -33,6 +33,54 @@ class InputInjector {
         AXIsProcessTrustedWithOptions(options)
     }
     
+    // MARK: - Remote Window Resize
+    
+    /// Resize a window belonging to the given process using the Accessibility API.
+    /// For apps with multiple windows the focused (frontmost) window is resized.
+    func resizeWindow(pid: pid_t, to size: CGSize) {
+        guard hasAccessibilityPermission else {
+            logger.warning("📐 Cannot resize window — Accessibility permission not granted")
+            return
+        }
+        
+        let appElement = AXUIElementCreateApplication(pid)
+        
+        // Try the focused window first (most intuitive target)
+        var targetWindow: AXUIElement?
+        var focusedRef: AnyObject?
+        if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedRef) == .success {
+            targetWindow = (focusedRef as! AXUIElement)
+        }
+        
+        // Fallback: first window in the list
+        if targetWindow == nil {
+            var windowsRef: AnyObject?
+            if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+               let windows = windowsRef as? [AXUIElement],
+               let first = windows.first {
+                targetWindow = first
+            }
+        }
+        
+        guard let window = targetWindow else {
+            logger.error("📐 No windows found for PID \(pid)")
+            return
+        }
+        
+        var newSize = size
+        guard let sizeValue = AXValueCreate(.cgSize, &newSize) else {
+            logger.error("📐 Failed to create AXValue for size \(Int(size.width))x\(Int(size.height))")
+            return
+        }
+        
+        let result = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+        if result == .success {
+            logger.info("📐 ✅ Resized window (PID \(pid)) to \(Int(size.width))x\(Int(size.height))")
+        } else {
+            logger.error("📐 ❌ Failed to resize window (PID \(pid)): AXError \(result.rawValue)")
+        }
+    }
+    
     /// Convert normalized coordinates (0...1) to screen coordinates
     private func normalizedToScreenCoordinates(x: Double, y: Double) -> CGPoint {
         if let bounds = captureBounds {

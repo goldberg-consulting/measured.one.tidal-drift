@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import CryptoKit
 import OSLog
 import Combine
 import CoreMedia
@@ -41,13 +42,29 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
     private var frameCount: Int = 0
     private var lastStatsUpdate: Date = Date()
     
+    // MARK: - Auth
+    
+    /// Password for authentication. Nil = no auth required.
+    private var password: String?
+    
+    /// Our 32-byte nonce used during the auth handshake.
+    private var clientNonce: Data?
+    
+    /// Whether we're currently waiting for auth to complete.
+    @Published var isAuthenticating = false
+    
+    /// Auth error message, if any.
+    @Published var authError: String?
+    
     init(device: DiscoveredDevice) {
         self.device = device
         transport.delegate = self
         decoder.delegate = self
     }
     
-    func connect() async throws {
+    func connect(password: String? = nil) async throws {
+        self.password = password
+        
         logger.info("Connecting to LocalCast host '\(self.device.name)'...")
         connectionStatus = "Resolving \(device.name)..."
         
@@ -86,9 +103,23 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             // Continue anyway - we might still receive on the send connection
         }
         
-        // Start sending heartbeats to establish connection
-        await MainActor.run {
-            startHeartbeat()
+        if let password = password, !password.isEmpty {
+            // Auth required — start the handshake instead of heartbeat
+            await MainActor.run {
+                self.isAuthenticating = true
+                self.connectionStatus = "Authenticating..."
+            }
+            sendAuthRequest()
+        } else {
+            // No auth — go straight to heartbeat + keyframes
+            startPostAuthFlow()
+        }
+    }
+    
+    /// Begin the normal post-auth flow: heartbeat + keyframe requests.
+    private func startPostAuthFlow() {
+        DispatchQueue.main.async { [weak self] in
+            self?.startHeartbeat()
         }
         
         // Request keyframes multiple times to ensure host receives one
@@ -101,6 +132,102 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.requestKeyFrame()
         }
+    }
+    
+    // MARK: - Auth Handshake (Client Side)
+    
+    /// Step 1: generate clientNonce and send authRequest.
+    private func sendAuthRequest() {
+        guard let endpoint = hostEndpoint else { return }
+        
+        let nonce = SessionCrypto.generateNonce()
+        self.clientNonce = nonce
+        
+        let packet = LocalCastPacket(
+            type: .authRequest,
+            sequenceNumber: 0,
+            timestamp: Date().timeIntervalSince1970,
+            payload: nonce
+        )
+        transport.send(packet: packet, to: endpoint)
+        logger.info("🔐 Sent authRequest with 32-byte nonce")
+    }
+    
+    /// Step 2: handle authChallenge from host.
+    private func handleAuthChallenge(payload: Data) {
+        guard payload.count > 32 else {
+            logger.warning("🔐 authChallenge too short (\(payload.count) bytes)")
+            return
+        }
+        guard let password = password, let clientNonce = clientNonce else {
+            logger.warning("🔐 authChallenge received but no password or nonce stored")
+            return
+        }
+        
+        // Extract hostNonce (first 32 bytes) and encrypted session key (rest)
+        let hostNonce = payload.prefix(32)
+        let encryptedSessionKey = Data(payload.dropFirst(32))
+        
+        // Derive pairingKey from password + nonces
+        let pairingKey = SessionCrypto.derivePairingKey(password: password, clientNonce: clientNonce, hostNonce: Data(hostNonce))
+        
+        // Decrypt the session key
+        guard let sessionKeyData = SessionCrypto.decrypt(encryptedSessionKey, using: pairingKey) else {
+            logger.warning("🔐 Failed to decrypt session key — wrong password?")
+            DispatchQueue.main.async {
+                self.authError = "Authentication failed — wrong password"
+                self.isAuthenticating = false
+                self.connectionStatus = "Auth failed"
+            }
+            return
+        }
+        
+        let sessionKey = SessionCrypto.importKey(sessionKeyData)
+        
+        // Send proof: encrypt "AUTH-OK" with the session key
+        guard let proof = SessionCrypto.encrypt(Data("AUTH-OK".utf8), using: sessionKey) else {
+            logger.error("🔐 Failed to create auth proof")
+            return
+        }
+        
+        // Store the session key temporarily (we'll set it on transport after authSuccess)
+        self.pendingSessionKey = sessionKey
+        
+        guard let endpoint = hostEndpoint else { return }
+        let packet = LocalCastPacket(
+            type: .authComplete,
+            sequenceNumber: 0,
+            timestamp: Date().timeIntervalSince1970,
+            payload: proof
+        )
+        transport.send(packet: packet, to: endpoint)
+        logger.info("🔐 Sent authComplete proof")
+    }
+    
+    /// Temporary storage for session key between authChallenge and authSuccess.
+    private var pendingSessionKey: SymmetricKey?
+    
+    /// Step 3: handle authSuccess from host — enable encryption and start streaming.
+    private func handleAuthSuccess(payload: Data) {
+        guard let sessionKey = pendingSessionKey else {
+            logger.warning("🔐 authSuccess received but no pending session key")
+            return
+        }
+        
+        // Enable encryption on the transport
+        transport.sessionKey = sessionKey
+        pendingSessionKey = nil
+        
+        logger.info("🔐 ✅ Authenticated — encryption enabled")
+        
+        DispatchQueue.main.async {
+            self.isAuthenticating = false
+            self.authError = nil
+            self.connectionStatus = "Authenticated"
+        }
+        
+        // Start the normal post-auth flow
+        startPostAuthFlow()
     }
     
     func disconnect() {
@@ -150,6 +277,26 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         }
         
         transport.send(packet: packet, to: endpoint)
+    }
+    
+    /// Ask the host to resize the streamed window to match the viewer dimensions.
+    func sendWindowResize(width: Double, height: Double) {
+        guard let endpoint = hostEndpoint else { return }
+        
+        var data = Data()
+        var w = width.bitPattern.bigEndian
+        var h = height.bitPattern.bigEndian
+        withUnsafeBytes(of: &w) { data.append(contentsOf: $0) }
+        withUnsafeBytes(of: &h) { data.append(contentsOf: $0) }
+        
+        let packet = LocalCastPacket(
+            type: .windowResize,
+            sequenceNumber: 0,
+            timestamp: Date().timeIntervalSince1970,
+            payload: data
+        )
+        transport.send(packet: packet, to: endpoint)
+        logger.info("📐 Sent window resize request: \(width)x\(height)")
     }
     
     func requestKeyFrame() {
@@ -349,12 +496,22 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             print("🎬 ClientSession: Received stream response")
             handleStreamResponse(packet.payload)
             
+        case .authChallenge:
+            handleAuthChallenge(payload: packet.payload)
+            
+        case .authSuccess:
+            handleAuthSuccess(payload: packet.payload)
+            
         default:
             print("❓ ClientSession: Received unknown packet type: \(packet.type)")
         }
     }
     
     private func handleAppListResponse(_ payload: Data) {
+        guard payload.count < 512_000 else {
+            print("❌ ClientSession: App list payload too large (\(payload.count) bytes), ignoring")
+            return
+        }
         do {
             let apps = try JSONDecoder().decode([RemoteAppInfo].self, from: payload)
             print("📋 ClientSession: Decoded \(apps.count) remote apps")

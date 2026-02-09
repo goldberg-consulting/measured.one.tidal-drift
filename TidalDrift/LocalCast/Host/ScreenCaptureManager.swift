@@ -1,5 +1,6 @@
 import Foundation
 import ScreenCaptureKit
+import AppKit
 import OSLog
 
 protocol ScreenCaptureManagerDelegate: AnyObject {
@@ -81,7 +82,7 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
     // MARK: - Single Window Capture
     
     /// Start capturing a specific window by its window ID
-    func startWindowCapture(windowID: CGWindowID, frameRate: Int = 30) async throws {
+    func startWindowCapture(windowID: CGWindowID, frameRate: Int = 30, maxDimension: Int = 2560) async throws {
         logger.info("Starting window capture for windowID: \(windowID)")
         
         let content: SCShareableContent
@@ -102,16 +103,22 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
         
         let filter = SCContentFilter(desktopIndependentWindow: window)
         
-        let maxDimension = 2560
+        // window.frame is in points. Multiply by backingScaleFactor to get
+        // actual pixel dimensions on Retina displays (typically 2x).
+        let retinaScale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let pixelWidth = window.frame.width * retinaScale
+        let pixelHeight = window.frame.height * retinaScale
+        
         let scale: Double
-        if window.frame.width > CGFloat(maxDimension) || window.frame.height > CGFloat(maxDimension) {
-            scale = Double(maxDimension) / Double(max(window.frame.width, window.frame.height))
+        if pixelWidth > CGFloat(maxDimension) || pixelHeight > CGFloat(maxDimension) {
+            scale = Double(maxDimension) / Double(max(pixelWidth, pixelHeight))
         } else {
             scale = 1.0
         }
         
-        let width = Int(window.frame.width * scale)
-        let height = Int(window.frame.height * scale)
+        // Round to even numbers (required for video encoding)
+        let width = Int(pixelWidth * scale) & ~1
+        let height = Int(pixelHeight * scale) & ~1
         
         // Store the window's screen bounds for input mapping
         captureBounds = window.frame
@@ -124,7 +131,7 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
     // MARK: - Single App Capture
     
     /// Start capturing all windows of a specific application
-    func startAppCapture(processID: pid_t, frameRate: Int = 30) async throws {
+    func startAppCapture(processID: pid_t, frameRate: Int = 30, maxDimension: Int = 2560) async throws {
         logger.info("Starting app capture for PID: \(processID)")
         
         let content: SCShareableContent
@@ -154,7 +161,8 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
             result.union(window.frame)
         }
         
-        let maxDimension = 2560
+        // bounds are in points -- convert to pixels for Retina fidelity
+        let retinaScale = NSScreen.main?.backingScaleFactor ?? 2.0
         let width: Int
         let height: Int
         
@@ -163,11 +171,14 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
             height = 1080
             captureBounds = nil  // Use full screen mapping
         } else {
-            let scale = min(1.0, Double(maxDimension) / Double(max(bounds.width, bounds.height)))
-            width = Int(bounds.width * scale)
-            height = Int(bounds.height * scale)
+            let pixelWidth = bounds.width * retinaScale
+            let pixelHeight = bounds.height * retinaScale
+            let scale = min(1.0, Double(maxDimension) / Double(max(pixelWidth, pixelHeight)))
+            // Round to even numbers (required for video encoding)
+            width = Int(pixelWidth * scale) & ~1
+            height = Int(pixelHeight * scale) & ~1
             captureBounds = bounds
-            logger.info("📱 App capture bounds: \(NSStringFromRect(bounds))")
+            logger.info("📱 App capture bounds: \(NSStringFromRect(bounds)) -> \(width)x\(height) pixels (retina: \(retinaScale)x)")
         }
         
         captureMode = .singleApp(processID)

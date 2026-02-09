@@ -131,6 +131,19 @@ struct StatusCardView: View {
                     .frame(width: 40)
                 }
             }
+            
+            // Show auth status when hosting
+            if localCast.isHosting {
+                HStack(spacing: 4) {
+                    Image(systemName: localCast.isAuthEnabled ? "lock.fill" : "lock.open")
+                        .font(.caption2)
+                        .foregroundColor(localCast.isAuthEnabled ? .green : .secondary)
+                    Text(localCast.isAuthEnabled ? "Encrypted" : "No auth")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            }
         }
     }
 

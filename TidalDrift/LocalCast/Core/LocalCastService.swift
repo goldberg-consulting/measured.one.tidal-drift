@@ -42,6 +42,9 @@ class LocalCastService: ObservableObject {
     @Published var isHosting = false
     @Published var activeConnections: [LocalCastConnection] = []
     @Published var currentStats: LocalCastStats?
+    
+    /// Whether authentication is active for the current hosting session.
+    @Published var isAuthEnabled = false
 
     weak var delegate: LocalCastServiceDelegate?
     var configuration: LocalCastConfiguration = .default
@@ -80,8 +83,29 @@ class LocalCastService: ObservableObject {
         if !permissions.accessibilityGranted {
             logger.warning("Accessibility permission not granted -- input forwarding disabled")
         }
+        
+        // Sync security settings from UserDefaults (set by LocalCastSettingsView)
+        let defaults = UserDefaults.standard
+        configuration.requireAuthentication = defaults.object(forKey: "localCastRequireAuth") as? Bool ?? true
+        configuration.inputRateLimit = defaults.object(forKey: "localCastInputRateLimit") as? Int ?? 120
 
-        let session = HostSession(configuration: configuration)
+        // Read the host password for auth
+        let hostPassword: String?
+        if configuration.requireAuthentication {
+            let stored = defaults.string(forKey: "localCastHostPassword") ?? ""
+            hostPassword = stored.isEmpty ? nil : stored
+            self.isAuthEnabled = hostPassword != nil
+            if hostPassword == nil {
+                logger.warning("🔐 Auth enabled but no host password set — auth will be skipped")
+            } else {
+                logger.info("🔐 Auth enabled with host password")
+            }
+        } else {
+            hostPassword = nil
+            self.isAuthEnabled = false
+        }
+        
+        let session = HostSession(configuration: configuration, password: hostPassword)
         try await session.start(target: target)
 
         advertiseLocalCast(port: LocalCastConfiguration.hostPort)
@@ -94,6 +118,7 @@ class LocalCastService: ObservableObject {
 
     func stopHosting() {
         self.isHosting = false
+        self.isAuthEnabled = false
         stopAdvertisement()
 
         Task {
@@ -136,10 +161,20 @@ class LocalCastService: ObservableObject {
 
     // MARK: - Client Mode
 
-    func connect(to device: DiscoveredDevice) async throws -> LocalCastViewerWindowController {
+    func connect(to device: DiscoveredDevice, password: String? = nil) async throws -> LocalCastViewerWindowController {
         logger.info("Connecting to \(device.name)")
+        
+        // If no password was provided, try to auto-fill from saved credentials
+        var resolvedPassword = password
+        if resolvedPassword == nil || resolvedPassword?.isEmpty == true {
+            if let creds = try? KeychainService.shared.getCredential(for: device.stableId) {
+                resolvedPassword = creds.password
+                logger.info("🔐 Using saved credentials for \(device.name)")
+            }
+        }
+        
         let session = ClientSession(device: device)
-        try await session.connect()
+        try await session.connect(password: resolvedPassword)
         return LocalCastViewerWindowController(device: device, session: session)
     }
 

@@ -18,7 +18,41 @@ class VideoEncoder {
     private var forceNextKeyFrame = false
     private let keyframeLock = NSLock()
     
-    func setup(width: Int, height: Int, codec: LocalCastConfiguration.Codec, bitrateMbps: Int, fps: Int) {
+    // Current configuration (stored so the encoder can auto-reconfigure
+    // when ScreenCaptureKit delivers frames at a different resolution than
+    // the initial placeholder, e.g. after switching from full display to
+    // a specific app).
+    private var currentWidth: Int = 0
+    private var currentHeight: Int = 0
+    private var currentCodec: LocalCastConfiguration.Codec = .h264
+    private var currentBitrateMbps: Int = 50
+    private var currentFps: Int = 60
+    private var currentQuality: Float = 0.8
+    
+    deinit {
+        // SAFETY: The VTCompressionSession callback holds an unretained pointer to
+        // self (passUnretained). We MUST invalidate the session before deallocation
+        // to prevent the callback from dereferencing freed memory.
+        if let session = session {
+            VTCompressionSessionInvalidate(session)
+        }
+    }
+    
+    func setup(width: Int, height: Int, codec: LocalCastConfiguration.Codec, bitrateMbps: Int, fps: Int, quality: Float = 0.8) {
+        // Tear down any existing session first
+        if let old = session {
+            VTCompressionSessionInvalidate(old)
+            session = nil
+        }
+        
+        // Store for auto-reconfigure
+        currentWidth = width
+        currentHeight = height
+        currentCodec = codec
+        currentBitrateMbps = bitrateMbps
+        currentFps = fps
+        currentQuality = quality
+        
         let vtCodec: CMVideoCodecType = codec == .hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264
         
         let status = VTCompressionSessionCreate(
@@ -42,18 +76,34 @@ class VideoEncoder {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: fps as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: (bitrateMbps * 1000 * 1000) as CFNumber)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: codec == .hevc ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_Main_AutoLevel)
+        // High profile gives better quality per bit than Main at the same bitrate
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: codec == .hevc ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 1.0 as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: fps as CFNumber)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: 0.8 as CFNumber) // 0.8 is very high quality but safer than 1.0
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: quality as CFNumber)
         
         VTCompressionSessionPrepareToEncodeFrames(session)
-        logger.info("Video encoder setup complete: \(width)x\(height), \(bitrateMbps)Mbps, \(fps)fps")
+        logger.info("Video encoder setup complete: \(width)x\(height), \(bitrateMbps)Mbps, \(fps)fps, quality=\(quality), profile=\(codec == .hevc ? "HEVC Main" : "H.264 High")")
     }
     
     func encode(_ sampleBuffer: CMSampleBuffer) {
-        guard let session = session, let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        
+        // Auto-reconfigure if the incoming frame resolution doesn't match the
+        // encoder session. This happens when ScreenCaptureManager starts capture
+        // at a different size than the encoder's initial placeholder (e.g. the
+        // encoder was pre-created at 1920x1080 but the actual Retina capture is
+        // 2880x1800).
+        let frameWidth = CVPixelBufferGetWidth(imageBuffer)
+        let frameHeight = CVPixelBufferGetHeight(imageBuffer)
+        if frameWidth != currentWidth || frameHeight != currentHeight {
+            logger.info("Frame \(frameWidth)x\(frameHeight) != encoder \(self.currentWidth)x\(self.currentHeight) -- reconfiguring")
+            setup(width: frameWidth, height: frameHeight, codec: currentCodec, bitrateMbps: currentBitrateMbps, fps: currentFps, quality: currentQuality)
+            forceKeyFrame()
+        }
+        
+        guard let session = session else { return }
         
         let presentationTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let duration = CMSampleBufferGetDuration(sampleBuffer)

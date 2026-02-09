@@ -22,6 +22,9 @@ class MetalRenderer: NSObject, MTKViewDelegate {
     private var sourceWidth: Int = 0
     private var sourceHeight: Int = 0
     
+    // Track last drawable size so we recalculate vertices when it changes
+    private var lastDrawableSize: CGSize = .zero
+    
     init(mtkView: MTKView) {
         self.mtkView = mtkView
         self.device = mtkView.device ?? MTLCreateSystemDefaultDevice()!
@@ -111,8 +114,10 @@ class MetalRenderer: NSObject, MTKViewDelegate {
         
         mtkView.device = device
         mtkView.delegate = self
-        mtkView.isPaused = false  // Enable continuous drawing
-        mtkView.enableSetNeedsDisplay = false
+        // Draw-on-demand: only redraw when we call setNeedsDisplay after
+        // receiving a new decoded frame. Saves GPU when idle / between streams.
+        mtkView.isPaused = true
+        mtkView.enableSetNeedsDisplay = true
         mtkView.preferredFramesPerSecond = 60
         mtkView.framebufferOnly = false  // Allow texture sampling
         
@@ -123,24 +128,29 @@ class MetalRenderer: NSObject, MTKViewDelegate {
         }
     }
     
-    /// Update vertex buffer to maintain aspect ratio when view/source size changes
-    private func updateVertexBufferForAspectRatio() {
+    /// Update vertex buffer to maintain aspect ratio when view/source size changes.
+    /// Pass the view size explicitly to avoid reading a stale `drawableSize`.
+    private func updateVertexBufferForAspectRatio(viewSize: CGSize? = nil) {
         guard sourceWidth > 0 && sourceHeight > 0 else { return }
         
-        let viewSize = mtkView.drawableSize
-        guard viewSize.width > 0 && viewSize.height > 0 else { return }
+        let size = viewSize ?? mtkView.drawableSize
+        guard size.width > 0 && size.height > 0 else { return }
+        
+        // Skip if nothing changed
+        if size == lastDrawableSize { return }
+        lastDrawableSize = size
         
         let sourceAspect = CGFloat(sourceWidth) / CGFloat(sourceHeight)
-        let viewAspect = viewSize.width / viewSize.height
+        let viewAspect = size.width / size.height
         
         var scaleX: Float = 1.0
         var scaleY: Float = 1.0
         
         if sourceAspect > viewAspect {
-            // Source is wider than view - letterbox (black bars top/bottom)
+            // Source is wider than view — letterbox (black bars top/bottom)
             scaleY = Float(viewAspect / sourceAspect)
         } else if sourceAspect < viewAspect {
-            // Source is taller than view - pillarbox (black bars left/right)
+            // Source is taller than view — pillarbox (black bars left/right)
             scaleX = Float(sourceAspect / viewAspect)
         }
         // If equal, no scaling needed (full screen fill)
@@ -178,6 +188,7 @@ class MetalRenderer: NSObject, MTKViewDelegate {
         if width != sourceWidth || height != sourceHeight {
             sourceWidth = width
             sourceHeight = height
+            lastDrawableSize = .zero  // Force vertex recalculation
             updateVertexBufferForAspectRatio()
             logger.info("🖥️ MetalRenderer: Source resolution changed to \(width)x\(height)")
         }
@@ -223,6 +234,17 @@ class MetalRenderer: NSObject, MTKViewDelegate {
             if frameCount % 60 == 0 {
                 logger.info("🖥️ MetalRenderer: Rendered \(self.frameCount) frames")
             }
+            
+            // Flush stale textures every 120 frames (~2 seconds at 60fps)
+            // to prevent GPU memory from growing on long sessions.
+            if frameCount % 120 == 0, let cache = textureCache {
+                CVMetalTextureCacheFlush(cache, 0)
+            }
+            
+            // Tell the MTKView it needs to redraw (draw-on-demand mode).
+            DispatchQueue.main.async {
+                self.mtkView.needsDisplay = true
+            }
         } else {
             logger.error("🖥️ MetalRenderer: Failed to create Metal texture: \(status)")
         }
@@ -232,8 +254,10 @@ class MetalRenderer: NSObject, MTKViewDelegate {
     
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         logger.info("View size changed to \(size.width)x\(size.height)")
-        // Recalculate aspect ratio when view size changes
-        updateVertexBufferForAspectRatio()
+        // Recalculate aspect ratio using the new size (not the possibly-stale drawableSize)
+        updateVertexBufferForAspectRatio(viewSize: size)
+        // Trigger a redraw so the new vertices take effect immediately
+        DispatchQueue.main.async { view.needsDisplay = true }
     }
     
     func draw(in view: MTKView) {
@@ -242,6 +266,12 @@ class MetalRenderer: NSObject, MTKViewDelegate {
               let drawable = view.currentDrawable,
               let renderPassDescriptor = view.currentRenderPassDescriptor else {
             return
+        }
+        
+        // Catch any missed resize events (full-screen transitions, etc.)
+        let currentSize = view.drawableSize
+        if currentSize != lastDrawableSize {
+            updateVertexBufferForAspectRatio(viewSize: currentSize)
         }
         
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {

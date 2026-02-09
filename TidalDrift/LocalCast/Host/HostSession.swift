@@ -1,5 +1,6 @@
 import Foundation
 import CoreMedia
+import CryptoKit
 import OSLog
 import Network
 import ScreenCaptureKit
@@ -23,8 +24,36 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
     private var isRunning = false
     private var sequenceNumber: UInt32 = 0
     
+    // MARK: - Auth state machine
+    
+    private enum AuthState {
+        case waitingForAuth
+        case authenticated
+    }
+    
+    private var authState: AuthState = .waitingForAuth
+    
+    /// The session key shared with the authenticated client (AES-256-GCM).
+    private var sessionKey: SymmetricKey?
+    
+    /// Host password used for HKDF key derivation (never sent over the wire).
+    private var hostPassword: String?
+    
+    /// Our 32-byte nonce used during the auth handshake.
+    private var hostNonce: Data?
+    
+    /// Client's 32-byte nonce received in authRequest.
+    private var clientNonce: Data?
+    
+    // MARK: - Rate limiter
+    
+    private var inputRateLimiter: InputRateLimiter?
+    
     /// Current capture target
     private(set) var captureTarget: HostCaptureTarget = .fullDisplay
+    
+    /// PID of the application being streamed (for window resize via Accessibility)
+    private var targetPID: pid_t?
     
     // Store both the endpoint and the connection for proper bidirectional communication
     private var clientEndpoint: NWEndpoint?
@@ -35,11 +64,29 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
     /// real cursor, which yanks it out of the viewer window creating a feedback loop.
     private var isLoopbackConnection = false
     
-    init(configuration: LocalCastConfiguration) {
+    init(configuration: LocalCastConfiguration, password: String? = nil) {
         self.configuration = configuration
         captureManager.delegate = self
         encoder.delegate = self
         transport.delegate = self
+        
+        // Configure auth
+        if configuration.requireAuthentication, let password = password, !password.isEmpty {
+            self.hostPassword = password
+            self.sessionKey = SessionCrypto.generateSessionKey()
+            self.authState = .waitingForAuth
+            logger.info("🔐 Auth enabled — waiting for client")
+        } else {
+            // No auth required — go straight to authenticated
+            self.authState = .authenticated
+            logger.info("🔓 Auth disabled — accepting all connections")
+        }
+        
+        // Configure rate limiter
+        if configuration.inputRateLimit > 0 {
+            inputRateLimiter = InputRateLimiter(maxPerSecond: configuration.inputRateLimit)
+            logger.info("⏱️ Input rate limit: \(configuration.inputRateLimit) events/sec")
+        }
     }
     
     /// Start hosting with full display capture (default)
@@ -117,6 +164,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
     
     /// Start full display capture (original behavior)
     private func startFullDisplayCapture() async throws {
+        targetPID = nil  // No window to resize in full display mode
         let displayID = CGMainDisplayID()
         logger.info("Using display ID: \(displayID)")
         
@@ -125,9 +173,8 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         let nativeWidth = mode?.pixelWidth ?? CGDisplayPixelsWide(displayID)
         let nativeHeight = mode?.pixelHeight ?? CGDisplayPixelsHigh(displayID)
         
-        // Cap resolution to prevent massive frames that clog the network
-        // Max 2560x1440 (1440p) for reliable streaming over WiFi
-        let maxDimension = 2560
+        // Cap resolution based on quality preset (ultra=3840, high=2560, etc.)
+        let maxDimension = configuration.maxCaptureDimension
         let scale: Double
         if nativeWidth > maxDimension || nativeHeight > maxDimension {
             scale = Double(maxDimension) / Double(max(nativeWidth, nativeHeight))
@@ -135,8 +182,9 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
             scale = 1.0
         }
         
-        let width = Int(Double(nativeWidth) * scale)
-        let height = Int(Double(nativeHeight) * scale)
+        // Round to even numbers (required for video encoding)
+        let width = Int(Double(nativeWidth) * scale) & ~1
+        let height = Int(Double(nativeHeight) * scale) & ~1
         
         logger.info("🚀 LocalCast: Capturing at \(width)x\(height) (native: \(nativeWidth)x\(nativeHeight), scale: \(String(format: "%.2f", scale)))")
         
@@ -145,9 +193,10 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
             height: height,
             codec: configuration.codec,
             bitrateMbps: configuration.bitrateMbps,
-            fps: configuration.targetFrameRate
+            fps: configuration.targetFrameRate,
+            quality: configuration.encoderQuality
         )
-        logger.info("✅ Video encoder configured: \(self.configuration.codec.rawValue), \(self.configuration.bitrateMbps)Mbps, \(self.configuration.targetFrameRate)fps")
+        logger.info("✅ Video encoder configured: \(self.configuration.codec.rawValue), \(self.configuration.bitrateMbps)Mbps, \(self.configuration.targetFrameRate)fps, quality=\(self.configuration.encoderQuality)")
         
         try await captureManager.startCapture(
             displayID: displayID,
@@ -159,33 +208,55 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
     
     /// Start window-specific capture
     private func startWindowCapture(windowID: CGWindowID) async throws {
-        // Set up encoder BEFORE starting capture to avoid race condition where
-        // frames arrive with no encoder session ready (causing silent drops / freeze).
+        // Look up the owning PID so we can resize the window later via Accessibility
+        if let infoList = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
+           let info = infoList.first,
+           let pid = info[kCGWindowOwnerPID as String] as? pid_t {
+            targetPID = pid
+            logger.info("📐 Stored target PID \(pid) for window resize")
+        }
+        
+        // Pre-create encoder with placeholder dimensions so the very first
+        // frames don't get silently dropped. The encoder auto-reconfigures
+        // when it receives frames at the actual Retina capture resolution.
         encoder.setup(
             width: 1920,
             height: 1080,
             codec: configuration.codec,
             bitrateMbps: configuration.bitrateMbps,
-            fps: configuration.targetFrameRate
+            fps: configuration.targetFrameRate,
+            quality: configuration.encoderQuality
         )
         encoder.forceKeyFrame()
         
-        try await captureManager.startWindowCapture(windowID: windowID, frameRate: configuration.targetFrameRate)
+        try await captureManager.startWindowCapture(
+            windowID: windowID,
+            frameRate: configuration.targetFrameRate,
+            maxDimension: configuration.maxCaptureDimension
+        )
     }
     
     /// Start app-specific capture
     private func startAppCapture(processID: pid_t) async throws {
-        // Set up encoder BEFORE starting capture to avoid race condition.
+        targetPID = processID
+        
+        // Pre-create encoder with placeholder dimensions (auto-reconfigures
+        // to actual Retina resolution on first frame).
         encoder.setup(
             width: 1920,
             height: 1080,
             codec: configuration.codec,
             bitrateMbps: configuration.bitrateMbps,
-            fps: configuration.targetFrameRate
+            fps: configuration.targetFrameRate,
+            quality: configuration.encoderQuality
         )
         encoder.forceKeyFrame()
         
-        try await captureManager.startAppCapture(processID: processID, frameRate: configuration.targetFrameRate)
+        try await captureManager.startAppCapture(
+            processID: processID,
+            frameRate: configuration.targetFrameRate,
+            maxDimension: configuration.maxCaptureDimension
+        )
     }
     
     func stop() async {
@@ -276,9 +347,40 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
             print("🔌 HostSession: Client connected from \(endpoint)")
         }
         
+        // --- Auth gate ---
+        // While waiting for auth, only auth packets are allowed through.
+        if authState == .waitingForAuth {
+            switch packet.type {
+            case .authRequest:
+                handleAuthRequest(payload: packet.payload, from: endpoint)
+                return
+            case .authComplete:
+                handleAuthComplete(payload: packet.payload, from: endpoint)
+                return
+            default:
+                // Drop all non-auth packets until authenticated
+                return
+            }
+        }
+        
+        // Post-auth: still handle authRequest for potential re-auth
+        if packet.type == .authRequest {
+            handleAuthRequest(payload: packet.payload, from: endpoint)
+            return
+        }
+        if packet.type == .authComplete {
+            handleAuthComplete(payload: packet.payload, from: endpoint)
+            return
+        }
+        
         switch packet.type {
         case .inputEvent:
             receivedInputCount += 1
+            
+            // Rate limit check — silently drop excess events
+            if let limiter = inputRateLimiter, !limiter.shouldAllow() {
+                return
+            }
             
             if let input = InputInjector.RemoteInput.deserialize(packet.payload) {
                 // Log clicks/keys always, moves periodically
@@ -334,6 +436,9 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
             Task {
                 await handleStreamRequest(payload: packet.payload, replyTo: endpoint)
             }
+            
+        case .windowResize:
+            handleWindowResize(payload: packet.payload)
             
         default:
             print("❓ HostSession: Received unknown packet type: \(packet.type)")
@@ -454,6 +559,10 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         print("🎬 HostSession: Payload size: \(payload.count) bytes")
         
         do {
+            // Cap payload size to prevent memory exhaustion from malicious packets
+            guard payload.count < 64_000 else {
+                throw LocalCastError.connectionFailed("Stream request payload too large (\(payload.count) bytes)")
+            }
             let decoder = JSONDecoder()
             let request = try decoder.decode(StreamRequest.self, from: payload)
             
@@ -561,5 +670,114 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
                 transport.send(packet: packet, to: endpoint)
             }
         }
+    }
+    
+    // MARK: - Auth Handshake (Host Side)
+    
+    /// Handle authRequest from client: generate hostNonce, derive pairingKey, encrypt sessionKey, reply with authChallenge.
+    private func handleAuthRequest(payload: Data, from endpoint: NWEndpoint) {
+        guard payload.count == 32 else {
+            logger.warning("🔐 authRequest: bad nonce length (\(payload.count))")
+            return
+        }
+        guard let password = hostPassword, let sessionKey = sessionKey else {
+            logger.warning("🔐 authRequest received but no password/session key (auth disabled?)")
+            return
+        }
+        
+        // Store client nonce
+        clientNonce = payload
+        
+        // Generate our nonce
+        let hNonce = SessionCrypto.generateNonce()
+        hostNonce = hNonce
+        
+        // Derive pairing key from password + nonces
+        let pairingKey = SessionCrypto.derivePairingKey(password: password, clientNonce: payload, hostNonce: hNonce)
+        
+        // Encrypt the real session key with the pairing key
+        let sessionKeyData = SessionCrypto.exportKey(sessionKey)
+        guard let encryptedSessionKey = SessionCrypto.encrypt(sessionKeyData, using: pairingKey) else {
+            logger.error("🔐 Failed to encrypt session key for authChallenge")
+            return
+        }
+        
+        // Build challenge payload: hostNonce (32) + encryptedSessionKey
+        var challengePayload = Data()
+        challengePayload.append(hNonce)
+        challengePayload.append(encryptedSessionKey)
+        
+        let challenge = LocalCastPacket(
+            type: .authChallenge,
+            sequenceNumber: 0,
+            timestamp: Date().timeIntervalSince1970,
+            payload: challengePayload
+        )
+        transport.send(packet: challenge, to: endpoint)
+        logger.info("🔐 Sent authChallenge to client (\(challengePayload.count) bytes)")
+    }
+    
+    /// Handle authComplete from client: verify proof, activate encryption, send authSuccess.
+    private func handleAuthComplete(payload: Data, from endpoint: NWEndpoint) {
+        guard let sessionKey = sessionKey else { return }
+        
+        // The client sends AES-GCM(sessionKey, "AUTH-OK") as proof it derived the correct key.
+        guard let proof = SessionCrypto.decrypt(payload, using: sessionKey) else {
+            logger.warning("🔐 authComplete: decryption failed — wrong PIN?")
+            return
+        }
+        
+        guard String(data: proof, encoding: .utf8) == "AUTH-OK" else {
+            logger.warning("🔐 authComplete: proof mismatch")
+            return
+        }
+        
+        // Auth succeeded — enable encryption on the transport
+        authState = .authenticated
+        transport.sessionKey = sessionKey
+        logger.info("🔐 ✅ Client authenticated — encryption enabled")
+        
+        // Send authSuccess (encrypted with session key now that transport has the key)
+        let successPacket = LocalCastPacket(
+            type: .authSuccess,
+            sequenceNumber: 0,
+            timestamp: Date().timeIntervalSince1970,
+            payload: Data("AUTH-SUCCESS".utf8)
+        )
+        transport.send(packet: successPacket, to: endpoint)
+        
+        // Force a keyframe so the client can start decoding
+        encoder.forceKeyFrame()
+    }
+    
+    // MARK: - Window Resize
+    
+    private func handleWindowResize(payload: Data) {
+        guard payload.count >= 16 else { return }
+        
+        let width = Double(bitPattern: payload.subdata(in: 0..<8).withUnsafeBytes { $0.load(as: UInt64.self).bigEndian })
+        let height = Double(bitPattern: payload.subdata(in: 8..<16).withUnsafeBytes { $0.load(as: UInt64.self).bigEndian })
+        
+        switch captureTarget {
+        case .fullDisplay:
+            // Nothing to resize in full display mode
+            return
+        case .window, .app:
+            break
+        }
+        
+        guard let pid = targetPID else {
+            logger.warning("📐 Resize requested but no target PID stored")
+            return
+        }
+        
+        if isLoopbackConnection {
+            // On loopback, resizing would fight with the user's own window.
+            print("📐 HostSession: Loopback — skipping remote resize")
+            return
+        }
+        
+        logger.info("📐 Resizing remote window (PID \(pid)) to \(Int(width))x\(Int(height))")
+        inputInjector.resizeWindow(pid: pid, to: CGSize(width: width, height: height))
     }
 }

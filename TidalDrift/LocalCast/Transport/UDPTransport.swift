@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import CryptoKit
 import OSLog
 
 protocol UDPTransportDelegate: AnyObject {
@@ -48,6 +49,10 @@ class UDPTransport {
     private let logger = Logger(subsystem: "com.tidaldrift", category: "UDPTransport")
     weak var delegate: UDPTransportDelegate?
     
+    /// When set, all outgoing packets are encrypted and incoming packets are decrypted.
+    /// Auth handshake packets travel in plaintext (prefix 0x00) before this is set.
+    var sessionKey: SymmetricKey?
+    
     private var listener: NWListener?
     private var connections: [String: NWConnection] = [:] // Key by endpoint description for reliable lookup
     private var incomingConnections: [String: NWConnection] = [:] // Connections from clients (for host to reply on)
@@ -62,6 +67,10 @@ class UDPTransport {
     private var fragmentBuffers: [UInt32: [UInt16: Data]] = [:] // frameId -> [fragmentIndex -> data]
     private var fragmentCounts: [UInt32: UInt16] = [:] // frameId -> totalFragments
     private let fragmentLock = NSLock()
+    
+    // Safety limits for fragment reassembly
+    private let maxTotalFragments: UInt16 = 1000  // ~1.2 MB max per frame
+    private let maxBufferedFrames = 60            // Drop anything older
     
     var localPort: UInt16? {
         listener?.port?.rawValue
@@ -102,16 +111,17 @@ class UDPTransport {
         connectionsLock.unlock()
         
         connection.stateUpdateHandler = { [weak self] state in
+            guard let self = self else { return }
             switch state {
             case .ready:
-                self?.logger.info("Client connected: \(endpointKey)")
-                self?.receive(on: connection, endpointKey: endpointKey)
-                self?.delegate?.udpTransport(self!, clientDidConnect: connection.endpoint, connection: connection)
+                self.logger.info("Client connected: \(endpointKey)")
+                self.receive(on: connection, endpointKey: endpointKey)
+                self.delegate?.udpTransport(self, clientDidConnect: connection.endpoint, connection: connection)
             case .failed(let error):
-                self?.logger.error("UDP connection failed: \(error.localizedDescription)")
-                self?.removeConnection(endpointKey: endpointKey)
+                self.logger.error("UDP connection failed: \(error.localizedDescription)")
+                self.removeConnection(endpointKey: endpointKey)
             case .cancelled:
-                self?.removeConnection(endpointKey: endpointKey)
+                self.removeConnection(endpointKey: endpointKey)
             default:
                 break
             }
@@ -135,8 +145,20 @@ class UDPTransport {
     
     /// Send packet using a specific connection (for replying on incoming connections)
     func send(packet: LocalCastPacket, on connection: NWConnection) {
-        let data = packet.serialize()
+        let raw = packet.serialize()
         sendCount += 1
+        
+        // Encrypt or wrap with plaintext flag
+        let data: Data
+        if let key = sessionKey {
+            guard let encrypted = SessionCrypto.encrypt(raw, using: key) else {
+                logger.error("Failed to encrypt packet of type \(packet.type.rawValue)")
+                return
+            }
+            data = encrypted
+        } else {
+            data = SessionCrypto.wrapPlaintext(raw)
+        }
         
         // Log non-video packets (input events, heartbeats, etc.)
         if packet.type != .videoFrame {
@@ -307,7 +329,7 @@ class UDPTransport {
         // Parse fragment header
         guard let header = FragmentHeader.deserialize(data) else {
             // Try parsing as raw packet (for backwards compatibility)
-            if let packet = LocalCastPacket.deserialize(data) {
+            if let packet = decryptAndParse(data) {
                 if packet.type != .videoFrame {
                     print("📨 UDPTransport: Received \(packet.type) packet (raw, no fragment header)")
                 }
@@ -325,7 +347,7 @@ class UDPTransport {
         
         // Single fragment (no reassembly needed)
         if header.totalFragments == 1 {
-            if let packet = LocalCastPacket.deserialize(Data(payload)) {
+            if let packet = decryptAndParse(Data(payload)) {
                 // Log non-video packets
                 if packet.type != .videoFrame {
                     print("📨 UDPTransport: Received \(packet.type) packet #\(receiveCount), payload: \(packet.payload.count) bytes")
@@ -343,16 +365,25 @@ class UDPTransport {
         // Multi-fragment: store and reassemble
         fragmentLock.lock()
         
+        // Reject obviously bogus fragment counts (DoS protection)
+        guard header.totalFragments > 0 && header.totalFragments <= maxTotalFragments else {
+            fragmentLock.unlock()
+            return
+        }
+        
         // Initialize buffer for this frame if needed
         if fragmentBuffers[header.frameId] == nil {
             fragmentBuffers[header.frameId] = [:]
             fragmentCounts[header.frameId] = header.totalFragments
             
-            // Clean old frames (keep last 100 frames in buffer)
-            if fragmentBuffers.count > 100 {
-                let oldestFrame = fragmentBuffers.keys.min() ?? 0
-                fragmentBuffers.removeValue(forKey: oldestFrame)
-                fragmentCounts.removeValue(forKey: oldestFrame)
+            // Evict stale frames aggressively -- keep only the most recent N
+            while fragmentBuffers.count > maxBufferedFrames {
+                if let oldestFrame = fragmentBuffers.keys.min() {
+                    fragmentBuffers.removeValue(forKey: oldestFrame)
+                    fragmentCounts.removeValue(forKey: oldestFrame)
+                } else {
+                    break
+                }
             }
         }
         
@@ -377,13 +408,38 @@ class UDPTransport {
             fragmentCounts.removeValue(forKey: header.frameId)
             fragmentLock.unlock()
             
-            // Parse and deliver
-            if let packet = LocalCastPacket.deserialize(fullData) {
+            // Parse and deliver (decrypt if needed)
+            if let packet = decryptAndParse(fullData) {
                 logger.debug("Reassembled frame \(header.frameId): \(fullData.count) bytes from \(total) fragments")
                 delegate?.udpTransport(self, didReceivePacket: packet, from: endpoint)
             }
         } else {
             fragmentLock.unlock()
+        }
+    }
+    
+    /// Strip the encryption/plaintext prefix and decrypt if needed, then parse.
+    private func decryptAndParse(_ data: Data) -> LocalCastPacket? {
+        guard !data.isEmpty else { return nil }
+        
+        if data[0] == SessionCrypto.encryptedFlag {
+            // Encrypted payload — need session key
+            guard let key = sessionKey else {
+                logger.warning("Received encrypted packet but no session key set")
+                return nil
+            }
+            guard let decrypted = SessionCrypto.decrypt(data, using: key) else {
+                logger.warning("Failed to decrypt packet (\(data.count) bytes)")
+                return nil
+            }
+            return LocalCastPacket.deserialize(decrypted)
+        } else if data[0] == SessionCrypto.plaintextFlag {
+            // Plaintext (auth handshake)
+            guard let unwrapped = SessionCrypto.unwrapPlaintext(data) else { return nil }
+            return LocalCastPacket.deserialize(unwrapped)
+        } else {
+            // Legacy/raw packet (no prefix) — backwards compat
+            return LocalCastPacket.deserialize(data)
         }
     }
     

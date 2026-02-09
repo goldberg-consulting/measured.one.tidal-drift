@@ -41,6 +41,7 @@ class LocalCastViewerWindowController: NSWindowController, ClientSessionDelegate
         
         super.init(window: window)
         
+        window.delegate = self
         session.renderer = MetalRenderer(mtkView: mtkView)
         session.delegate = self
         
@@ -269,12 +270,38 @@ class LocalCastViewerWindowController: NSWindowController, ClientSessionDelegate
         clientSession.disconnect()
         super.close()
     }
+    
+    // MARK: - Viewer → Remote Window Resize
+    
+    private func sendViewerSize() {
+        guard let contentView = window?.contentView else { return }
+        let size = contentView.frame.size
+        guard size.width > 0 && size.height > 0 else { return }
+        print("📐 Viewer content resized to \(size.width)x\(size.height) — forwarding to host")
+        clientSession.sendWindowResize(width: size.width, height: size.height)
+    }
+}
+
+// MARK: - NSWindowDelegate (resize sync)
+
+extension LocalCastViewerWindowController: NSWindowDelegate {
+    /// Fires at the end of a drag-to-resize.
+    func windowDidEndLiveResize(_ notification: Notification) {
+        sendViewerSize()
+    }
+    
+    /// Fires for non-drag resizes (double-click title bar, Stage Manager tile, etc.).
+    func windowDidResize(_ notification: Notification) {
+        guard let window = self.window, !window.inLiveResize else { return }
+        sendViewerSize()
+    }
 }
 
 struct LocalCastContentView: View {
     let mtkView: MTKView
     @ObservedObject var session: ClientSession
     @AppStorage("showLatencyOverlay") var showOverlay = false
+    @State private var toolbarExpanded = false
     @State private var showAppPicker = false
     @State private var selectedRemoteApp: RemoteAppInfo?
     
@@ -282,39 +309,72 @@ struct LocalCastContentView: View {
         ZStack {
             MetalViewRepresentable(mtkView: mtkView)
             
-            // Top bar with controls
-            VStack {
-                HStack {
-                    // App picker button
-                    Button {
-                        if session.remoteApps.isEmpty {
-                            session.requestAppList()
+            // Top edge: collapsible toolbar
+            VStack(spacing: 0) {
+                if toolbarExpanded {
+                    // Expanded toolbar
+                    HStack {
+                        Button {
+                            if session.remoteApps.isEmpty {
+                                session.requestAppList()
+                            }
+                            showAppPicker.toggle()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "square.stack.3d.up")
+                                Text("Apps")
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
                         }
-                        showAppPicker.toggle()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "square.stack.3d.up")
-                            Text("Apps")
+                        .buttonStyle(.bordered)
+                        
+                        Spacer()
+                        
+                        if showOverlay {
+                            LocalCastStatsOverlay(stats: session.stats)
                         }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
                     }
-                    .buttonStyle(.bordered)
-                    .help("Browse remote apps to stream")
-                    
-                    Spacer()
-                    
-                    if showOverlay {
-                        LocalCastStatsOverlay(stats: session.stats)
-                    }
+                    .padding(.horizontal, 8)
+                    .padding(.top, 6)
+                    .padding(.bottom, 2)
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                .padding(8)
-                .background(.ultraThinMaterial)
+                
+                // Toggle tab — always visible
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        toolbarExpanded.toggle()
+                    }
+                    if !toolbarExpanded {
+                        showAppPicker = false
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: toolbarExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                    }
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 48, height: 20)
+                    .background(.white.opacity(0.15), in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 4)
                 
                 Spacer()
             }
+            .background(alignment: .top) {
+                // Material backdrop covers only the toolbar area
+                if toolbarExpanded {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .frame(height: 48)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
             
-            // App picker overlay
+            // App picker panel
             if showAppPicker {
                 RemoteAppPickerView(
                     session: session,

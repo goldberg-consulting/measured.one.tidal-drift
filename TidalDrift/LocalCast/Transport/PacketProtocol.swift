@@ -13,6 +13,11 @@ struct LocalCastPacket {
         case appListResponse = 8     // Host sends list of streamable apps
         case streamAppRequest = 9    // Client requests to stream a specific app/window
         case streamAppResponse = 10  // Host confirms streaming started
+        case windowResize = 11       // Client requests host to resize the streamed window
+        case authRequest = 12        // Client sends 32-byte clientNonce
+        case authChallenge = 13      // Host sends 32-byte hostNonce + encrypted session key
+        case authComplete = 14       // Client sends proof encrypted with session key
+        case authSuccess = 15        // Host confirms auth, encrypted with session key
     }
     
     let type: PacketType

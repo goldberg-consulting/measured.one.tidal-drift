@@ -7,6 +7,7 @@ struct DeviceCardView: View {
     
     @State private var isPressed = false
     @State private var isTargetedForDrop = false
+    @State private var showPINEntry = false
     
     @ObservedObject private var dropService = TidalDropService.shared
     
@@ -40,6 +41,19 @@ struct DeviceCardView: View {
         .onTapGesture { handleTap() }
         .onDrop(of: [.fileURL], isTargeted: $isTargetedForDrop) { providers in
             handleDrop(providers: providers)
+        }
+        .sheet(isPresented: $showPINEntry) {
+            LocalCastPINEntryView(
+                deviceName: device.name,
+                savedPassword: savedDevicePassword,
+                onConnect: { password in
+                    showPINEntry = false
+                    connectLocalCast(password: password)
+                },
+                onCancel: {
+                    showPINEntry = false
+                }
+            )
         }
     }
     
@@ -81,10 +95,27 @@ struct DeviceCardView: View {
         }
     }
     
+    /// Look up saved password for this device from Keychain.
+    private var savedDevicePassword: String? {
+        guard let creds = try? KeychainService.shared.getCredential(for: device.stableId) else {
+            return nil
+        }
+        return creds.password.isEmpty ? nil : creds.password
+    }
+    
     private func startLocalCast() {
+        // If saved credentials exist, auto-connect without showing the sheet
+        if let password = savedDevicePassword {
+            connectLocalCast(password: password)
+        } else {
+            showPINEntry = true
+        }
+    }
+    
+    private func connectLocalCast(password: String?) {
         Task {
             do {
-                let viewer = try await LocalCastService.shared.connect(to: device)
+                let viewer = try await LocalCastService.shared.connect(to: device, password: password)
                 await MainActor.run {
                     viewer.showWindow(nil)
                 }
