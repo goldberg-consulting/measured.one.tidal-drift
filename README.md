@@ -144,4 +144,4 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ## Credits
 
-Developed by [Goldberg Consulting, LLC](https://goldbergconsulting.dev).
+Developed by [Goldberg Consulting, LLC d/b/a Measured.One](https://measured.one).
