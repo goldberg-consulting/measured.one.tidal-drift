@@ -1,0 +1,165 @@
+import Foundation
+import Network
+
+extension TidalDriftTestRunner {
+    
+    func testUDPPortBind() async -> (Bool, String) {
+        let testPort: UInt16 = 15904
+        do {
+            let listener = try NWListener(using: .udp, on: NWEndpoint.Port(rawValue: testPort)!)
+            var ready = false
+            listener.stateUpdateHandler = { state in
+                if case .ready = state { ready = true }
+            }
+            listener.start(queue: DispatchQueue(label: "test.udp"))
+            
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            listener.cancel()
+            
+            if ready {
+                return (true, "Successfully bound UDP on port \(testPort)")
+            }
+            return (false, "UDP listener did not reach ready state on port \(testPort)")
+        } catch {
+            return (false, "Cannot bind UDP port \(testPort): \(error.localizedDescription)")
+        }
+    }
+    
+    func testTCPPortBind() async -> (Bool, String) {
+        let testPort: UInt16 = 15902
+        do {
+            let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: testPort)!)
+            var ready = false
+            listener.stateUpdateHandler = { state in
+                if case .ready = state { ready = true }
+            }
+            listener.start(queue: DispatchQueue(label: "test.tcp"))
+            
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            listener.cancel()
+            
+            if ready {
+                return (true, "Successfully bound TCP on port \(testPort)")
+            }
+            return (false, "TCP listener did not reach ready state on port \(testPort)")
+        } catch {
+            return (false, "Cannot bind TCP port \(testPort): \(error.localizedDescription)")
+        }
+    }
+    
+    func testLoopbackTCPRoundtrip() async -> (Bool, String) {
+        let testPort: UInt16 = 15910
+        let testPayload = "TidalDrift-TCP-Test-\(UUID().uuidString)"
+        var receivedData: String?
+        
+        // Start a listener
+        let listener: NWListener
+        do {
+            listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: testPort)!)
+        } catch {
+            return (false, "Cannot create TCP listener: \(error.localizedDescription)")
+        }
+        
+        let queue = DispatchQueue(label: "test.tcp.roundtrip")
+        
+        listener.newConnectionHandler = { conn in
+            conn.start(queue: queue)
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, _, _ in
+                if let data = data, let str = String(data: data, encoding: .utf8) {
+                    receivedData = str
+                    // Echo back
+                    conn.send(content: data, completion: .contentProcessed { _ in
+                        conn.cancel()
+                    })
+                }
+            }
+        }
+        listener.start(queue: queue)
+        
+        defer { listener.cancel() }
+        
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        
+        // Connect and send
+        let endpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: testPort)!)
+        let conn = NWConnection(to: endpoint, using: .tcp)
+        var echoReceived: String?
+        
+        conn.stateUpdateHandler = { state in
+            if case .ready = state {
+                conn.send(content: testPayload.data(using: .utf8), completion: .contentProcessed { _ in
+                    conn.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, _, _ in
+                        if let data = data { echoReceived = String(data: data, encoding: .utf8) }
+                        conn.cancel()
+                    }
+                })
+            }
+        }
+        conn.start(queue: queue)
+        
+        // Wait for roundtrip
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            if echoReceived != nil { break }
+        }
+        
+        if let echo = echoReceived, echo == testPayload {
+            return (true, "TCP loopback echo: sent and received \(testPayload.count) bytes")
+        }
+        if receivedData != nil {
+            return (false, "Server received data but client did not get echo back")
+        }
+        return (false, "TCP loopback roundtrip timed out")
+    }
+    
+    func testLoopbackUDPRoundtrip() async -> (Bool, String) {
+        let testPort: UInt16 = 15911
+        let testPayload = "TidalDrift-UDP-Test-\(UUID().uuidString)"
+        var received = false
+        
+        let listener: NWListener
+        do {
+            listener = try NWListener(using: .udp, on: NWEndpoint.Port(rawValue: testPort)!)
+        } catch {
+            return (false, "Cannot create UDP listener: \(error.localizedDescription)")
+        }
+        
+        let queue = DispatchQueue(label: "test.udp.roundtrip")
+        
+        listener.newConnectionHandler = { conn in
+            conn.start(queue: queue)
+            conn.receiveMessage { data, _, _, _ in
+                if let data = data, String(data: data, encoding: .utf8) == testPayload {
+                    received = true
+                }
+                conn.cancel()
+            }
+        }
+        listener.start(queue: queue)
+        
+        defer { listener.cancel() }
+        
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        
+        // Send a UDP packet to ourselves
+        let endpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: testPort)!)
+        let conn = NWConnection(to: endpoint, using: .udp)
+        conn.stateUpdateHandler = { state in
+            if case .ready = state {
+                conn.send(content: testPayload.data(using: .utf8), completion: .contentProcessed { _ in
+                    conn.cancel()
+                })
+            }
+        }
+        conn.start(queue: queue)
+        
+        for _ in 0..<10 {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if received { break }
+        }
+        
+        return (received,
+                received ? "UDP loopback: sent and received \(testPayload.count) bytes"
+                         : "UDP loopback roundtrip timed out")
+    }
+}

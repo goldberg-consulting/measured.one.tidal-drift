@@ -79,9 +79,23 @@ class VideoEncoder {
         // High profile gives better quality per bit than Main at the same bitrate
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: codec == .hevc ? kVTProfileLevel_HEVC_Main_AutoLevel : kVTProfileLevel_H264_High_AutoLevel)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 1.0 as CFNumber)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: fps as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: 4.0 as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: (fps * 4) as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: quality as CFNumber)
+        
+        // Low-latency tuning: emit each frame immediately instead of buffering
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 0 as CFNumber)
+        // Quality-focused: let the hardware encoder spend more time per frame.
+        // Do NOT set PrioritizeEncodingSpeedOverQuality — we want the best visual
+        // quality the encoder can produce within real-time constraints.
+        
+        // Relaxed data rate limit: allow bursts up to 3x average bitrate within
+        // a 1-second window. On a LAN, burst spikes are acceptable and this lets
+        // keyframes retain much higher quality instead of being aggressively quantized.
+        let bytesPerSecond = (bitrateMbps * 1_000_000) / 8
+        let burstLimit = bytesPerSecond * 3  // 3x average for keyframe headroom
+        let dataRateLimit: [Int] = [burstLimit, 1]  // [bytes, seconds]
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: dataRateLimit as CFArray)
         
         VTCompressionSessionPrepareToEncodeFrames(session)
         logger.info("Video encoder setup complete: \(width)x\(height), \(bitrateMbps)Mbps, \(fps)fps, quality=\(quality), profile=\(codec == .hevc ? "HEVC Main" : "H.264 High")")
@@ -132,6 +146,74 @@ class VideoEncoder {
             sourceFrameRefcon: nil,
             infoFlagsOut: &flags
         )
+    }
+    
+    /// Update encoder parameters in-place without recreating the VTCompressionSession.
+    /// VTSessionSetProperty supports live changes to bitrate, quality, and FPS.
+    /// Returns true if all properties were set successfully.
+    @discardableResult
+    func updateLiveParameters(bitrateMbps: Int? = nil, fps: Int? = nil, quality: Float? = nil, keyframeIntervalSeconds: Double? = nil) -> Bool {
+        guard let session = session else {
+            logger.warning("updateLiveParameters: no active session")
+            return false
+        }
+        
+        var allOk = true
+        
+        if let bps = bitrateMbps, bps != currentBitrateMbps {
+            currentBitrateMbps = bps
+            let avgBitRate = bps * 1_000_000
+            let s1 = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: avgBitRate as CFNumber)
+            
+            // Also update the burst data rate limit (3x average in a 1-second window)
+            let bytesPerSecond = avgBitRate / 8
+            let burstLimit = bytesPerSecond * 3
+            let dataRateLimit: [Int] = [burstLimit, 1]
+            let s2 = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: dataRateLimit as CFArray)
+            
+            if s1 == noErr && s2 == noErr {
+                logger.info("Live update: bitrate → \(bps) Mbps")
+            } else {
+                logger.warning("Live update bitrate failed: avg=\(s1), limit=\(s2)")
+                allOk = false
+            }
+        }
+        
+        if let newFps = fps, newFps != currentFps {
+            currentFps = newFps
+            let s = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: newFps as CFNumber)
+            if s == noErr {
+                logger.info("Live update: fps → \(newFps)")
+            } else {
+                logger.warning("Live update fps failed: \(s)")
+                allOk = false
+            }
+        }
+        
+        if let q = quality, q != currentQuality {
+            currentQuality = q
+            let s = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_Quality, value: q as CFNumber)
+            if s == noErr {
+                logger.info("Live update: quality → \(q)")
+            } else {
+                logger.warning("Live update quality failed: \(s)")
+                allOk = false
+            }
+        }
+        
+        if let kfi = keyframeIntervalSeconds {
+            let s1 = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: kfi as CFNumber)
+            let kfiFrames = currentFps * Int(kfi)
+            let s2 = VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: kfiFrames as CFNumber)
+            if s1 == noErr && s2 == noErr {
+                logger.info("Live update: keyframe interval → \(kfi)s (\(kfiFrames) frames)")
+            } else {
+                logger.warning("Live update keyframe interval failed: \(s1)/\(s2)")
+                allOk = false
+            }
+        }
+        
+        return allOk
     }
     
     func invalidate() {

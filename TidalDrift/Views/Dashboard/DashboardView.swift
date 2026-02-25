@@ -27,7 +27,7 @@ struct DashboardView: View {
             NetworkDiscoveryService.shared.startBrowsing()
         }
         .onReceive(NotificationCenter.default.publisher(for: .scanNetwork)) { _ in
-            viewModel.refreshScan()
+            Task { await viewModel.discoverDevices() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .addDeviceManually)) { _ in
             viewModel.showAddDeviceSheet = true
@@ -91,23 +91,20 @@ struct DashboardView: View {
                 
                 Spacer()
                 
-                // Scan Subnet button - prominent
                 Button {
-                    Task {
-                        await viewModel.scanSubnet(baseIP: NetworkUtils.getLocalIPAddress() ?? "192.168.1.1")
-                    }
+                    Task { await viewModel.discoverDevices() }
                 } label: {
                     HStack(spacing: 6) {
                         ScanButtonIcon(isScanning: discoveryService.isScanningSubnet)
                             .frame(width: 18, height: 18)
                         
-                        Text(discoveryService.isScanningSubnet ? "Scanning..." : "Scan Subnet")
+                        Text(discoveryService.isScanningSubnet ? "Scanning..." : "Discover Devices")
                     }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(discoveryService.isScanningSubnet)
+                .keyboardShortcut("r", modifiers: .command)
                 
-                // Add Device button - next to scan
                 Button {
                     viewModel.showAddDeviceSheet = true
                 } label: {
@@ -115,9 +112,7 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.bordered)
                 
-                Divider()
-                    .frame(height: 20)
-                    .padding(.horizontal, 8)
+                Spacer().frame(width: 8)
                 
                 Picker("Sort", selection: $viewModel.sortOrder) {
                     ForEach(DashboardViewModel.SortOrder.allCases, id: \.self) { order in
@@ -127,10 +122,6 @@ struct DashboardView: View {
                 .pickerStyle(.menu)
                 .frame(minWidth: 130)
                 
-                Divider()
-                    .frame(height: 20)
-                    .padding(.horizontal, 8)
-                
                 Picker("View", selection: $viewModel.viewMode) {
                     ForEach(DashboardViewModel.ViewMode.allCases, id: \.self) { mode in
                         Image(systemName: mode.icon).tag(mode)
@@ -139,16 +130,6 @@ struct DashboardView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 80)
                 .labelsHidden()
-                
-                // Clear all and rescan button
-                Button {
-                    discoveryService.clearAllAndRescan()
-                } label: {
-                    Label("Clear & Rescan", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Clear all devices and rediscover from scratch")
             }
             .padding()
             
@@ -191,8 +172,8 @@ struct DashboardView: View {
                 .multilineTextAlignment(.center)
             
             HStack(spacing: 16) {
-                Button("Scan Network") {
-                    viewModel.refreshScan()
+                Button("Discover Devices") {
+                    Task { await viewModel.discoverDevices() }
                 }
                 .buttonStyle(.borderedProminent)
                 

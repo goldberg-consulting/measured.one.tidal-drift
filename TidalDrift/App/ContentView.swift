@@ -1,20 +1,17 @@
 import SwiftUI
 
+/// ContentView is no longer used as the primary app window.
+/// The app is entirely menu-bar driven. This file is retained for
+/// compatibility but the WindowGroup scene has been removed.
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     
     var body: some View {
-        Group {
-            if !appState.hasCompletedOnboarding {
-                OnboardingContainerView()
-            } else {
-                DashboardView()
+        OnboardingContainerView()
+            .onAppear {
+                appState.loadTrustedDevices()
+                appState.loadConnectionHistory()
             }
-        }
-        .onAppear {
-            appState.loadTrustedDevices()
-            appState.loadConnectionHistory()
-        }
     }
 }
 

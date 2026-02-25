@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import ApplicationServices
 
 class AppState: ObservableObject {
     static let shared = AppState()
@@ -18,6 +19,7 @@ class AppState: ObservableObject {
     @Published var screenSharingEnabled: Bool = false
     @Published var fileSharingEnabled: Bool = false
     @Published var remoteLoginEnabled: Bool = false
+    @Published var accessibilityGranted: Bool = false
     @Published var localIPAddress: String = "Unknown"
     @Published var computerName: String = NetworkUtils.computerName
     
@@ -82,6 +84,7 @@ class AppState: ObservableObject {
         screenSharingEnabled = await SharingConfigurationService.shared.isScreenSharingEnabled()
         fileSharingEnabled = await SharingConfigurationService.shared.isFileSharingEnabled()
         remoteLoginEnabled = await SharingConfigurationService.shared.isRemoteLoginEnabled()
+        accessibilityGranted = AXIsProcessTrusted()
     }
     
     func toggleDeviceTrust(_ deviceId: UUID) {

@@ -35,6 +35,11 @@ struct SettingsView: View {
                     Label("Maintenance", systemImage: "wrench.and.screwdriver")
                 }
             
+            TestSuiteView()
+                .tabItem {
+                    Label("Tests", systemImage: "testtube.2")
+                }
+            
             AboutView()
                 .tabItem {
                     Label("About", systemImage: "info.circle")

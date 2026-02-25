@@ -37,7 +37,7 @@ struct LocalCastConnection: Identifiable {
 @MainActor
 class LocalCastService: ObservableObject {
     static let shared = LocalCastService()
-    private let logger = Logger(subsystem: "com.tidaldrift", category: "LocalCastService")
+    let logger = Logger(subsystem: "com.tidaldrift", category: "LocalCastService")
 
     @Published var isHosting = false
     @Published var activeConnections: [LocalCastConnection] = []
@@ -45,15 +45,45 @@ class LocalCastService: ObservableObject {
     
     /// Whether authentication is active for the current hosting session.
     @Published var isAuthEnabled = false
+    
+    /// Live-adjustable streaming quality. Changes are pushed to the active
+    /// host session immediately via Combine observation.
+    let streamingTuning = StreamingTuning()
 
     weak var delegate: LocalCastServiceDelegate?
     var configuration: LocalCastConfiguration = .default
 
     private var hostSession: HostSession?
+    private var tuningSubscription: AnyCancellable?
     private var advertisementProcess: Process?
     private let serviceType = "_tidaldrift-cast._udp"
+    
+    /// Strong references to active viewer window controllers so they (and their
+    /// input-capture event monitors) survive for the lifetime of the window.
+    private var activeViewerControllers: [LocalCastViewerWindowController] = []
 
-    private init() {}
+    
+    
+    private init() {
+        // Observe tuning changes and forward to the active host session.
+        // Debounce to 50ms so rapid slider drags don't flood the encoder.
+        tuningSubscription = streamingTuning.objectWillChange
+            .debounce(for: .milliseconds(50), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                // objectWillChange fires *before* the value changes,
+                // so dispatch async to read the new values.
+                Task { @MainActor in
+                    self.applyTuningToHostSession()
+                }
+            }
+    }
+    
+    /// Push current tuning values to the active host session.
+    private func applyTuningToHostSession() {
+        guard isHosting, let session = hostSession else { return }
+        session.updateStreamingQuality(streamingTuning)
+    }
 
     // MARK: - Host Mode
 
@@ -72,16 +102,18 @@ class LocalCastService: ObservableObject {
     private func startHosting(target: HostCaptureTarget) async throws {
         let permissions = LocalCastPermissions()
 
-        // Request screen capture (prompts the user once; passive after that).
-        // If still not granted, throw so the UI can show "Open System Settings".
         if !permissions.requestScreenCaptureIfNeeded() {
-            throw LocalCastError.permissionDenied(.screenCapture)
+            logger.info("Screen Recording denied -- waiting for user to grant in System Settings")
+            let granted = await permissions.waitForScreenCaptureGrant(maxWait: 30)
+            if !granted {
+                throw LocalCastError.permissionDenied(.screenCapture)
+            }
         }
 
-        // Accessibility is optional -- streaming works without it, just no input control.
-        await permissions.checkPermissions()  // refresh accessibility status
+        await permissions.checkPermissions()
         if !permissions.accessibilityGranted {
             logger.warning("Accessibility permission not granted -- input forwarding disabled")
+            permissions.requestAccessibilityPermission()
         }
         
         // Sync security settings from UserDefaults (set by LocalCastSettingsView)
@@ -104,6 +136,9 @@ class LocalCastService: ObservableObject {
             hostPassword = nil
             self.isAuthEnabled = false
         }
+        
+        // Sync initial tuning from the configuration preset
+        streamingTuning.syncFrom(configuration)
         
         let session = HostSession(configuration: configuration, password: hostPassword)
         try await session.start(target: target)
@@ -137,7 +172,16 @@ class LocalCastService: ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/dns-sd")
         let codec = configuration.codec == .hevc ? "hevc" : "h264"
-        process.arguments = ["-R", displayName, serviceType, "local.", "\(port)", "version=1", "codec=\(codec)", "fps=\(configuration.targetFrameRate)"]
+        let ip = NetworkUtils.getLocalIPAddress() ?? ""
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        process.arguments = [
+            "-R", displayName, serviceType, "local.", "\(port)",
+            "version=\(appVersion)",
+            "codec=\(codec)",
+            "fps=\(configuration.targetFrameRate)",
+            "ip=\(ip)",
+            "auth=\(configuration.requireAuthentication ? "1" : "0")"
+        ]
 
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -146,7 +190,7 @@ class LocalCastService: ObservableObject {
         do {
             try process.run()
             self.advertisementProcess = process
-            logger.debug("Bonjour advertisement started (PID: \(process.processIdentifier))")
+            logger.info("LocalCast advertised: \(displayName) on port \(port) [\(codec), \(self.configuration.targetFrameRate)fps, ip=\(ip)]")
         } catch {
             logger.error("Failed to start Bonjour advertisement: \(error.localizedDescription)")
         }
@@ -175,9 +219,57 @@ class LocalCastService: ObservableObject {
         
         let session = ClientSession(device: device)
         try await session.connect(password: resolvedPassword)
-        return LocalCastViewerWindowController(device: device, session: session)
+        let controller = LocalCastViewerWindowController(device: device, session: session)
+        
+        // Retain the controller so its NSEvent monitors (input capture) stay alive
+        // for the lifetime of the window. Without this, ARC deallocates the controller
+        // as soon as the caller's local variable goes out of scope, killing all input.
+        activeViewerControllers.append(controller)
+        controller.onClose = { [weak self] closedController in
+            self?.activeViewerControllers.removeAll { $0 === closedController }
+        }
+        
+        return controller
     }
 
+    // MARK: - System Screen Share + App Control
+    
+    /// Strong references to active app control panels.
+    private var activeControlPanels: [AppControlPanelController] = []
+    
+    /// Opens macOS Screen Sharing.app (VNC) for the video stream AND
+    /// establishes a TidalDrift control channel for remote app management.
+    /// Returns the floating App Control panel controller.
+    func connectSystemScreenShare(to device: DiscoveredDevice, password: String? = nil) async throws -> AppControlPanelController {
+        logger.info("System Screen Share + App Control for \(device.name)")
+        
+        // 1. Open macOS Screen Sharing.app via VNC
+        try await ScreenShareConnectionService.shared.connect(to: device)
+        logger.info("Opened Screen Sharing.app for \(device.name)")
+        
+        // 2. Establish a TidalDrift control channel (same auth flow as LocalCast)
+        var resolvedPassword = password
+        if resolvedPassword == nil || resolvedPassword?.isEmpty == true {
+            if let creds = try? KeychainService.shared.getCredential(for: device.stableId) {
+                resolvedPassword = creds.password
+                logger.info("🔐 Using saved credentials for control channel to \(device.name)")
+            }
+        }
+        
+        let session = ClientSession(device: device)
+        try await session.connect(password: resolvedPassword)
+        
+        // 3. Show the floating app control panel
+        let controller = AppControlPanelController(device: device, session: session)
+        
+        activeControlPanels.append(controller)
+        controller.onClose = { [weak self] closed in
+            self?.activeControlPanels.removeAll { $0 === closed }
+        }
+        
+        return controller
+    }
+    
     func disconnect(from device: DiscoveredDevice) {
         activeConnections.removeAll { $0.device.id == device.id }
     }

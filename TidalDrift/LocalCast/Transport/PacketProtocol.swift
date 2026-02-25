@@ -18,6 +18,10 @@ struct LocalCastPacket {
         case authChallenge = 13      // Host sends 32-byte hostNonce + encrypted session key
         case authComplete = 14       // Client sends proof encrypted with session key
         case authSuccess = 15        // Host confirms auth, encrypted with session key
+        case focusAppRequest = 16    // Client asks host to bring an app to the foreground
+        case isolateAppRequest = 17   // Client asks host to hide all apps except one (for VNC single-app view)
+        case restoreAppsRequest = 18  // Client asks host to unhide previously isolated apps
+        case qualityUpdate = 19       // Client sends streaming quality tuning snapshot to host
     }
     
     let type: PacketType

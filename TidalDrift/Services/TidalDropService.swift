@@ -72,13 +72,39 @@ class TidalDropService: ObservableObject {
     func smartSendFile(at url: URL, to device: DiscoveredDevice) {
         print("🌊 TidalDrop: Smart send - checking for mounted shares for \(device.name)")
         
-        // Check for mounted volumes that might be from this device
         if let mountedPath = findMountedShare(for: device) {
             print("🌊 TidalDrop: Found mounted share: \(mountedPath)")
             copyToMountedShare(file: url, destination: mountedPath, device: device)
         } else {
             print("🌊 TidalDrop: No mounted share, using peer-to-peer")
             sendFile(at: url, to: device.ipAddress)
+        }
+    }
+    
+    /// Sends pre-read file data. Use this when the caller has already read the
+    /// file (e.g. while security-scoped access was still active from a drag & drop).
+    func smartSendFileData(fileName: String, fileData: Data, to device: DiscoveredDevice) {
+        print("🌊 TidalDrop: Smart send (data) '\(fileName)' (\(fileData.count) bytes) to \(device.name)")
+        
+        if let mountedPath = findMountedShare(for: device) {
+            let destination = resolveDropDestination(within: mountedPath)
+            let destinationFile = destination.appendingPathComponent(fileName)
+            
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    if FileManager.default.fileExists(atPath: destinationFile.path) {
+                        try FileManager.default.removeItem(at: destinationFile)
+                    }
+                    try fileData.write(to: destinationFile)
+                    print("✅ TidalDrop: Wrote '\(fileName)' to mounted share")
+                    self.notifyCompletion(fileName: fileName, isIncoming: false, viaMountedShare: true)
+                } catch {
+                    print("TidalDrop: Mounted share write failed, using peer-to-peer: \(error)")
+                    self.sendFileWithData(fileName: fileName, fileData: fileData, to: device.ipAddress)
+                }
+            }
+        } else {
+            sendFileWithData(fileName: fileName, fileData: fileData, to: device.ipAddress)
         }
     }
     
@@ -117,6 +143,37 @@ class TidalDropService: ObservableObject {
         return nil
     }
     
+    /// Resolves the best subfolder within a mounted share for TidalDrop files.
+    /// Prefers `Public/Drop Box` (matches macOS convention and the peer-to-peer
+    /// receiver path), falling back to `Public/`, then the share root.
+    private func resolveDropDestination(within shareRoot: URL) -> URL {
+        let fm = FileManager.default
+        
+        // Best: Public/Drop Box (standard macOS incoming files folder)
+        let dropBox = shareRoot.appendingPathComponent("Public").appendingPathComponent("Drop Box")
+        if fm.fileExists(atPath: dropBox.path) {
+            print("🌊 TidalDrop: Using Public/Drop Box within mounted share")
+            return dropBox
+        }
+        
+        // Try to create it if Public exists
+        let publicDir = shareRoot.appendingPathComponent("Public")
+        if fm.fileExists(atPath: publicDir.path) {
+            do {
+                try fm.createDirectory(at: dropBox, withIntermediateDirectories: true)
+                print("🌊 TidalDrop: Created Public/Drop Box within mounted share")
+                return dropBox
+            } catch {
+                print("🌊 TidalDrop: Could not create Drop Box, using Public/")
+                return publicDir
+            }
+        }
+        
+        // Fallback: share root (original behavior)
+        print("🌊 TidalDrop: No Public folder found, using share root")
+        return shareRoot
+    }
+    
     /// Copies a file to a mounted network share
     private func copyToMountedShare(file: URL, destination: URL, device: DiscoveredDevice) {
         let transferId = UUID()
@@ -127,14 +184,18 @@ class TidalDropService: ObservableObject {
         
         let fileSize = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
         
+        // Resolve the best subfolder within the share (Public/Drop Box > Public > root)
+        let resolvedDestination = resolveDropDestination(within: destination)
+        
         print("🌊 TidalDrop: Attempting copy")
         print("   Source: \(file.path)")
-        print("   Destination: \(destination.path)")
+        print("   Share root: \(destination.path)")
+        print("   Resolved destination: \(resolvedDestination.path)")
         print("   File: \(fileName) (\(fileSize) bytes)")
         print("   Security scoped access: \(didStartAccess)")
         
         // Check if destination is writable
-        let isWritable = FileManager.default.isWritableFile(atPath: destination.path)
+        let isWritable = FileManager.default.isWritableFile(atPath: resolvedDestination.path)
         print("   Destination writable: \(isWritable)")
         
         if !isWritable {
@@ -173,7 +234,7 @@ class TidalDropService: ObservableObject {
         
         // Perform write on background queue
         DispatchQueue.global(qos: .userInitiated).async {
-            let destinationFile = destination.appendingPathComponent(fileName)
+            let destinationFile = resolvedDestination.appendingPathComponent(fileName)
             
             print("🌊 TidalDrop: Writing to: \(destinationFile.path)")
             

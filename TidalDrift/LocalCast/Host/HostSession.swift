@@ -259,6 +259,38 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         )
     }
     
+    // MARK: - Live Quality Tuning
+    
+    /// Apply live streaming quality changes from a `StreamingTuning` snapshot.
+    /// Updates the encoder in-place (no session recreation) and adjusts the
+    /// capture frame rate via `SCStream.updateConfiguration()`.
+    func updateStreamingQuality(_ tuning: StreamingTuning) {
+        guard isRunning else {
+            logger.info("updateStreamingQuality: session not running, skipping")
+            return
+        }
+        
+        let fps = tuning.effectiveFps
+        let bitrate = tuning.effectiveBitrateMbps
+        let quality = tuning.effectiveEncoderQuality
+        let kfi = tuning.effectiveKeyframeInterval
+        
+        logger.info("Applying live quality: \(bitrate)Mbps, \(fps)fps, q=\(quality), kfi=\(kfi)s")
+        
+        // Update encoder properties in-place (no session teardown)
+        encoder.updateLiveParameters(
+            bitrateMbps: bitrate,
+            fps: fps,
+            quality: quality,
+            keyframeIntervalSeconds: kfi
+        )
+        
+        // Update capture frame rate
+        Task {
+            await captureManager.updateFrameRate(fps)
+        }
+    }
+    
     func stop() async {
         guard isRunning else { return }
         
@@ -321,11 +353,29 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         // Detect loopback: check if client IP is localhost or our own IP
         isLoopbackConnection = Self.isLocalEndpoint(endpoint)
         
+        let localIP = NetworkUtils.getLocalIPAddress() ?? "unknown"
         logger.info("LocalCast: Client connected from \(String(describing: endpoint)) (loopback: \(self.isLoopbackConnection))")
-        print("🔌 HostSession: Client connected from \(endpoint) (loopback: \(isLoopbackConnection))")
+        print("[INPUT-DIAG] 🔌 CLIENT CONNECTED from \(endpoint)")
+        print("[INPUT-DIAG]    isLoopback=\(isLoopbackConnection), localIP=\(localIP)")
+        print("[INPUT-DIAG]    Accessibility=\(inputInjector.hasAccessibilityPermission)")
+        if isLoopbackConnection {
+            print("[INPUT-DIAG] ⚠️ LOOPBACK DETECTED — all input injection will be SKIPPED")
+        }
         
-        // Send initial keyframe request to encoder
+        // Force an initial keyframe immediately so the client decoder can sync.
+        // On cross-machine networks, large keyframes may not survive UDP fragmentation
+        // on the first attempt. Send multiple keyframe requests with delays to increase
+        // the probability of at least one arriving intact.
         encoder.forceKeyFrame()
+        
+        // Stagger additional keyframe requests
+        for delay in [0.3, 0.8, 1.5, 3.0] {
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self, self.isRunning else { return }
+                self.encoder.forceKeyFrame()
+                self.logger.info("🔑 Sending retry keyframe at +\(delay)s")
+            }
+        }
     }
     
     /// Check if an endpoint is a loopback/local address
@@ -377,8 +427,11 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         case .inputEvent:
             receivedInputCount += 1
             
-            // Rate limit check — silently drop excess events
+            // Rate limit check
             if let limiter = inputRateLimiter, !limiter.shouldAllow() {
+                if receivedInputCount % 100 == 0 {
+                    print("[INPUT-DIAG] ⚠️ RATE LIMITED: dropped input #\(receivedInputCount)")
+                }
                 return
             }
             
@@ -393,23 +446,22 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
                 }
                 
                 if isSignificant {
-                    print("🎮 HostSession: Input #\(receivedInputCount): \(input)")
+                    print("[INPUT-DIAG] 📥 RECEIVED input #\(receivedInputCount) from \(endpoint): \(input)")
+                    print("[INPUT-DIAG]    isLoopback=\(isLoopbackConnection), hasAccessibility=\(inputInjector.hasAccessibilityPermission)")
                 }
                 
                 if isLoopbackConnection {
-                    // On loopback, skip CGEvent injection -- it moves the real cursor
-                    // which yanks it out of the viewer window (feedback loop).
-                    // The input pipeline is proven: capture -> serialize -> UDP -> deserialize.
                     if isSignificant {
-                        print("   ⏭️ Loopback mode: input received but injection skipped (would cause cursor feedback)")
+                        print("[INPUT-DIAG] ⛔ BLOCKED: loopback connection — injection skipped to prevent cursor feedback")
                     }
                 } else {
+                    if isSignificant {
+                        print("[INPUT-DIAG] ✅ INJECTING input #\(receivedInputCount)")
+                    }
                     inputInjector.inject(input)
                 }
             } else {
-                if receivedInputCount <= 10 {
-                    print("❌ HostSession: Failed to deserialize input event (payload: \(packet.payload.count) bytes)")
-                }
+                print("[INPUT-DIAG] ❌ DESERIALIZE FAILED: input #\(receivedInputCount), payload: \(packet.payload.count) bytes, first byte: \(packet.payload.first ?? 0)")
             }
             
         case .heartbeat:
@@ -439,6 +491,18 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
             
         case .windowResize:
             handleWindowResize(payload: packet.payload)
+            
+        case .focusAppRequest:
+            handleFocusAppRequest(payload: packet.payload)
+            
+        case .isolateAppRequest:
+            handleIsolateAppRequest(payload: packet.payload)
+            
+        case .restoreAppsRequest:
+            handleRestoreAppsRequest()
+            
+        case .qualityUpdate:
+            handleQualityUpdate(payload: packet.payload)
             
         default:
             print("❓ HostSession: Received unknown packet type: \(packet.type)")
@@ -780,4 +844,56 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         logger.info("📐 Resizing remote window (PID \(pid)) to \(Int(width))x\(Int(height))")
         inputInjector.resizeWindow(pid: pid, to: CGSize(width: width, height: height))
     }
+    
+    // MARK: - Focus App
+    
+    /// Bring a remote app to the foreground. Payload is a JSON-encoded FocusRequest.
+    private func handleFocusAppRequest(payload: Data) {
+        struct FocusRequest: Decodable {
+            let processID: pid_t
+            let appName: String?
+        }
+        
+        guard let request = try? JSONDecoder().decode(FocusRequest.self, from: payload) else {
+            logger.warning("focusAppRequest: could not decode payload")
+            return
+        }
+        
+        logger.info("🎯 Focus request: '\(request.appName ?? "PID \(request.processID)")' (PID \(request.processID))")
+        inputInjector.focusApp(pid: request.processID)
+    }
+    
+    // MARK: - App Isolation (VNC single-app mode)
+    
+    private func handleIsolateAppRequest(payload: Data) {
+        struct IsolateRequest: Decodable {
+            let processID: pid_t
+            let appName: String?
+        }
+        
+        guard let request = try? JSONDecoder().decode(IsolateRequest.self, from: payload) else {
+            logger.warning("isolateAppRequest: could not decode payload")
+            return
+        }
+        
+        logger.info("🔒 Isolate request: '\(request.appName ?? "PID \(request.processID)")' (PID \(request.processID))")
+        inputInjector.isolateApp(pid: request.processID)
+    }
+    
+    private func handleRestoreAppsRequest() {
+        logger.info("🔓 Restore apps request")
+        inputInjector.restoreApps()
+    }
+    
+    private func handleQualityUpdate(payload: Data) {
+        guard let update = try? JSONDecoder().decode(QualityUpdatePayload.self, from: payload) else {
+            logger.warning("qualityUpdate: could not decode payload")
+            return
+        }
+        let tuning = StreamingTuning()
+        tuning.apply(update)
+        logger.info("🎚️ Quality update from client: q=\(update.quality), fps=\(tuning.effectiveFps), bitrate=\(tuning.effectiveBitrateMbps)Mbps")
+        updateStreamingQuality(tuning)
+    }
+    
 }

@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import ApplicationServices
+import AppKit
 import OSLog
 
 class InputInjector {
@@ -31,6 +32,78 @@ class InputInjector {
     func requestAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
+    }
+    
+    // MARK: - Remote App Focus
+    
+    /// Bring the application with the given PID to the foreground.
+    /// Uses NSRunningApplication.activate which does not require Accessibility permission.
+    func focusApp(pid: pid_t) {
+        guard let app = NSRunningApplication(processIdentifier: pid) else {
+            logger.warning("Cannot focus app — PID \(pid) not found")
+            return
+        }
+        let ok = app.activate(options: [.activateIgnoringOtherApps])
+        if ok {
+            logger.info("✅ Focused app '\(app.localizedName ?? "PID \(pid)")' (PID \(pid))")
+        } else {
+            logger.warning("Failed to activate app PID \(pid)")
+        }
+    }
+    
+    // MARK: - App Isolation (for VNC single-app view)
+    
+    /// PIDs of apps we hid during isolation, so we can restore them later.
+    private var isolatedHiddenPIDs: [pid_t] = []
+    
+    /// The PID of the currently isolated app, if any.
+    private(set) var isolatedAppPID: pid_t?
+    
+    /// Hide every regular (non-target, non-TidalDrift) app and activate the target.
+    /// Designed for use with System Screen Sharing (VNC) so only one app is visible.
+    func isolateApp(pid: pid_t) {
+        guard let targetApp = NSRunningApplication(processIdentifier: pid) else {
+            logger.warning("Cannot isolate — PID \(pid) not found")
+            return
+        }
+        
+        restoreApps()
+        
+        var hidden: [pid_t] = []
+        let ownBundleID = Bundle.main.bundleIdentifier ?? ""
+        
+        for app in NSWorkspace.shared.runningApplications {
+            guard app.activationPolicy == .regular,
+                  app.processIdentifier != pid,
+                  app.bundleIdentifier != ownBundleID,
+                  !app.isHidden else { continue }
+            
+            if app.hide() {
+                hidden.append(app.processIdentifier)
+            }
+        }
+        
+        isolatedHiddenPIDs = hidden
+        isolatedAppPID = pid
+        targetApp.activate(options: [.activateIgnoringOtherApps])
+        
+        logger.info("🔒 Isolated '\(targetApp.localizedName ?? "PID \(pid)")' — hid \(hidden.count) other apps")
+    }
+    
+    /// Unhide all apps that were hidden by `isolateApp(pid:)`.
+    func restoreApps() {
+        guard !isolatedHiddenPIDs.isEmpty else { return }
+        
+        var restored = 0
+        for pid in isolatedHiddenPIDs {
+            if let app = NSRunningApplication(processIdentifier: pid) {
+                if app.unhide() { restored += 1 }
+            }
+        }
+        
+        logger.info("🔓 Restored \(restored)/\(self.isolatedHiddenPIDs.count) apps")
+        isolatedHiddenPIDs.removeAll()
+        isolatedAppPID = nil
     }
     
     // MARK: - Remote Window Resize
@@ -81,19 +154,34 @@ class InputInjector {
         }
     }
     
-    /// Convert normalized coordinates (0...1) to screen coordinates
+    /// Convert normalized coordinates (0...1) to Quartz screen coordinates.
+    ///
+    /// CGEvent uses Quartz display coordinates where (0,0) is the TOP-LEFT of
+    /// the primary display and Y increases downward.
+    ///
+    /// ScreenCaptureKit's `SCWindow.frame` (and `captureBounds`) uses the same
+    /// Quartz coordinate system — origin at top-left, Y increases downward
+    /// (matching CGWindowListCopyWindowInfo / kCGWindowBounds).
+    ///
+    /// The client sends normalized coordinates where x=0,y=0 is the top-left of
+    /// the captured content and (1,1) is the bottom-right.
     private func normalizedToScreenCoordinates(x: Double, y: Double) -> CGPoint {
         if let bounds = captureBounds {
-            // When capturing a window, map to the window's bounds
-            let screenX = bounds.origin.x + (x * bounds.width)
-            let screenY = bounds.origin.y + (y * bounds.height)
+            // Window/app capture — captureBounds is already in Quartz coordinates
+            // (origin = top-left of the captured area on screen).
+            let screenX = bounds.origin.x + (CGFloat(x) * bounds.width)
+            let screenY = bounds.origin.y + (CGFloat(y) * bounds.height)
             return CGPoint(x: screenX, y: screenY)
         } else {
-            // Full display mode - map to the main display
-            let displayID = CGMainDisplayID()
-            let logicalWidth = CGFloat(CGDisplayPixelsWide(displayID))
-            let logicalHeight = CGFloat(CGDisplayPixelsHigh(displayID))
-            return CGPoint(x: x * logicalWidth, y: y * logicalHeight)
+            // Full display mode — normalized coords map to the full display
+            // in Quartz space (y=0 is top, y=1 is bottom).
+            // Use CGDisplayBounds which is documented to return the display rect
+            // in the global display coordinate space (points, not pixels).
+            let displayBounds = CGDisplayBounds(CGMainDisplayID())
+            return CGPoint(
+                x: displayBounds.origin.x + x * displayBounds.width,
+                y: displayBounds.origin.y + y * displayBounds.height
+            )
         }
     }
     
@@ -114,11 +202,14 @@ class InputInjector {
             }
         }
         
-        // Log first few inputs and then periodically to verify receipt
-        if inputCount <= 5 || inputCount % 100 == 0 {
+        // Log first few inputs and then periodically to verify receipt and coordinate mapping
+        if inputCount <= 10 || inputCount % 200 == 0 {
             print("🎮 InputInjector: Injecting input #\(self.inputCount): \(String(describing: input))")
             if let bounds = captureBounds {
-                print("🎮 InputInjector: Using capture bounds: \(bounds)")
+                print("🎮 InputInjector: captureBounds: origin=(\(Int(bounds.origin.x)),\(Int(bounds.origin.y))) size=(\(Int(bounds.width))x\(Int(bounds.height)))")
+            } else {
+                let db = CGDisplayBounds(CGMainDisplayID())
+                print("🎮 InputInjector: Full display mode, displayBounds=(\(Int(db.origin.x)),\(Int(db.origin.y)),\(Int(db.width))x\(Int(db.height)))")
             }
         }
         
@@ -135,38 +226,38 @@ class InputInjector {
             let point = normalizedToScreenCoordinates(x: x, y: y)
             let type: CGEventType = button == 0 ? .leftMouseDown : (button == 1 ? .rightMouseDown : .otherMouseDown)
             guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: CGMouseButton(rawValue: UInt32(button))!) else {
-                logger.error("❌ Failed to create mouseDown event at (\(x), \(y))")
+                print("[INPUT-DIAG] ❌ INJECT FAILED: could not create mouseDown CGEvent at norm(\(x), \(y))")
                 return
             }
-            logger.info("🖱️ InputInjector: mouseDown at screen position (\(Int(point.x)), \(Int(point.y)))")
+            print("[INPUT-DIAG] 💉 INJECTING mouseDown button=\(button) at screen(\(Int(point.x)), \(Int(point.y))) from norm(\(String(format: "%.3f", x)), \(String(format: "%.3f", y))) bounds=\(String(describing: captureBounds))")
             event.post(tap: .cghidEventTap)
             
         case .mouseUp(let button, let x, let y):
             let point = normalizedToScreenCoordinates(x: x, y: y)
             let type: CGEventType = button == 0 ? .leftMouseUp : (button == 1 ? .rightMouseUp : .otherMouseUp)
             guard let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: CGMouseButton(rawValue: UInt32(button))!) else {
-                logger.error("❌ Failed to create mouseUp event at (\(x), \(y))")
+                print("[INPUT-DIAG] ❌ INJECT FAILED: could not create mouseUp CGEvent at norm(\(x), \(y))")
                 return
             }
-            logger.info("🖱️ InputInjector: mouseUp at screen position (\(Int(point.x)), \(Int(point.y)))")
+            print("[INPUT-DIAG] 💉 INJECTING mouseUp button=\(button) at screen(\(Int(point.x)), \(Int(point.y)))")
             event.post(tap: .cghidEventTap)
             
         case .keyDown(let keyCode, let modifiers):
             guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true) else {
-                logger.error("❌ Failed to create keyDown event for keyCode \(keyCode)")
+                print("[INPUT-DIAG] ❌ INJECT FAILED: could not create keyDown CGEvent for keyCode \(keyCode)")
                 return
             }
             event.flags = CGEventFlags(rawValue: modifiers)
-            logger.info("⌨️ InputInjector: keyDown keyCode=\(keyCode), modifiers=\(modifiers)")
+            print("[INPUT-DIAG] 💉 INJECTING keyDown keyCode=\(keyCode) modifiers=\(modifiers)")
             event.post(tap: .cghidEventTap)
             
         case .keyUp(let keyCode, let modifiers):
             guard let event = CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: false) else {
-                logger.error("❌ Failed to create keyUp event for keyCode \(keyCode)")
+                print("[INPUT-DIAG] ❌ INJECT FAILED: could not create keyUp CGEvent for keyCode \(keyCode)")
                 return
             }
             event.flags = CGEventFlags(rawValue: modifiers)
-            logger.info("⌨️ InputInjector: keyUp keyCode=\(keyCode)")
+            print("[INPUT-DIAG] 💉 INJECTING keyUp keyCode=\(keyCode)")
             event.post(tap: .cghidEventTap)
             
         case .scroll(let deltaX, let deltaY):

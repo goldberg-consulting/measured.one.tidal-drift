@@ -60,7 +60,7 @@ class UDPTransport {
     private let connectionsLock = NSLock()
     
     // Fragmentation constants
-    private let maxPayloadSize = 1200 // Leave room for headers within MTU
+    private let maxPayloadSize = 1400 // Larger payload per fragment (fits in 1500-byte ethernet MTU with IP/UDP headers)
     private var frameCounter: UInt32 = 0
     
     // Fragment reassembly
@@ -69,16 +69,26 @@ class UDPTransport {
     private let fragmentLock = NSLock()
     
     // Safety limits for fragment reassembly
-    private let maxTotalFragments: UInt16 = 1000  // ~1.2 MB max per frame
-    private let maxBufferedFrames = 60            // Drop anything older
+    // Quality-focused encoding at 4K can produce keyframes of 2-5 MB.
+    // At 1390 bytes/fragment, a 5 MB frame needs ~3,600 fragments.
+    private let maxTotalFragments: UInt16 = 5000  // ~7 MB max per frame
+    private let maxBufferedFrames = 120           // Allow more in-flight frames for high-throughput
     
     var localPort: UInt16? {
         listener?.port?.rawValue
     }
     
-    func startListening(port: UInt16) throws {
+    /// Configure UDP parameters optimized for high-throughput streaming.
+    private func configuredUDPParameters() -> NWParameters {
         let params = NWParameters.udp
         params.allowLocalEndpointReuse = true
+        // Use .userInteractive service class to signal the OS this is latency-sensitive traffic.
+        params.serviceClass = .interactiveVideo
+        return params
+    }
+    
+    func startListening(port: UInt16) throws {
+        let params = configuredUDPParameters()
         
         let nwPort = port == 0 ? NWEndpoint.Port.any : NWEndpoint.Port(rawValue: port)!
         listener = try NWListener(using: params, on: nwPort)
@@ -261,8 +271,7 @@ class UDPTransport {
             connectionsLock.unlock()
             isNewConnection = true
             
-            let params = NWParameters.udp
-            connection = NWConnection(to: endpoint, using: params)
+            connection = NWConnection(to: endpoint, using: configuredUDPParameters())
             setupOutgoingConnection(connection, endpointKey: endpointKey)
             
             connectionsLock.lock()
@@ -368,6 +377,9 @@ class UDPTransport {
         // Reject obviously bogus fragment counts (DoS protection)
         guard header.totalFragments > 0 && header.totalFragments <= maxTotalFragments else {
             fragmentLock.unlock()
+            if header.totalFragments > maxTotalFragments {
+                logger.warning("⚠️ Frame \(header.frameId) has \(header.totalFragments) fragments (limit: \(self.maxTotalFragments)) — dropped. Frame too large for UDP transport.")
+            }
             return
         }
         

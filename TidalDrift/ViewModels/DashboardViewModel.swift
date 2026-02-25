@@ -139,6 +139,15 @@ class DashboardViewModel: ObservableObject {
         NetworkDiscoveryService.shared.refreshScan()
     }
     
+    /// Single-button discovery: Bonjour refresh + subnet scan combined
+    func discoverDevices() async {
+        NetworkDiscoveryService.shared.clearStaleDevices()
+        NetworkDiscoveryService.shared.refreshScan()
+        
+        let baseIP = NetworkUtils.getLocalIPAddress() ?? "192.168.1.1"
+        await NetworkDiscoveryService.shared.scanSubnet(baseIP: baseIP)
+    }
+    
     func addManualDevice(name: String, ipAddress: String) {
         NetworkDiscoveryService.shared.addManualDevice(name: name, ipAddress: ipAddress)
         showAddDeviceSheet = false

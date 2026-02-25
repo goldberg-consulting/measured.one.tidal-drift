@@ -1,11 +1,15 @@
 import SwiftUI
 import MetalKit
+import Combine
 
 class LocalCastViewerWindowController: NSWindowController, ClientSessionDelegate {
     private let device: DiscoveredDevice
     private let clientSession: ClientSession
     private var localMonitors: [Any] = []
     private var remoteResolution: CGSize = CGSize(width: 1280, height: 720)
+    
+    /// Called when the window is closed so the owner can release its strong reference.
+    var onClose: ((LocalCastViewerWindowController) -> Void)?
     
     init(device: DiscoveredDevice, session: ClientSession) {
         print("🎮 LocalCastViewerWindowController: INIT START for \(device.name)")
@@ -35,7 +39,8 @@ class LocalCastViewerWindowController: NSWindowController, ClientSessionDelegate
         // Wrap in hosting view with overlay
         let contentView = LocalCastContentView(
             mtkView: mtkView,
-            session: session
+            session: session,
+            tuning: LocalCastService.shared.streamingTuning
         )
         window.contentView = NSHostingView(rootView: contentView)
         
@@ -96,42 +101,47 @@ class LocalCastViewerWindowController: NSWindowController, ClientSessionDelegate
         }
     }
     
-    private var inputCaptureCount = 0
+    private let toolbarRegionHeight: CGFloat = 55
+    private let bottomBarRegionHeight: CGFloat = 32
+    
+    private var diagCount = 0
     
     private func setupInputCapture() {
-        print("🎮 LocalCastViewer: Setting up input capture...")
-        print("🎮 LocalCastViewer: Window = \(String(describing: window))")
-        print("🎮 LocalCastViewer: Window accepts mouse: \(window?.acceptsMouseMovedEvents ?? false)")
-        
-        // Make window accept first responder for keyboard events
         window?.makeKeyAndOrderFront(nil)
         window?.makeFirstResponder(window?.contentView)
         
-        print("🎮 LocalCastViewer: Window is key: \(window?.isKeyWindow ?? false)")
-        print("🎮 LocalCastViewer: First responder: \(String(describing: window?.firstResponder))")
-        
-        // Monitor local events when our window is key
-        // Use a broader matching to ensure we capture events
         let mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .mouseMoved, .leftMouseDragged, .rightMouseDragged, .scrollWheel]) { [weak self] event in
             guard let self = self else { return event }
             guard let window = self.window else { return event }
             
-            // Log ALL mouse events for debugging (first 10)
-            self.inputCaptureCount += 1
-            if self.inputCaptureCount <= 10 {
-                print("🖱️ LOCAL MONITOR: Event type=\(event.type.rawValue), window=\(event.window == window ? "OURS" : "OTHER")")
+            let isOurs = event.window == window
+            self.diagCount += 1
+            if self.diagCount <= 20 || self.diagCount % 500 == 0 {
+                NSLog("🖱️ MONITOR #%d: type=%ld ours=%d capture=%d overlay=%d",
+                      self.diagCount, event.type.rawValue, isOurs ? 1 : 0,
+                      self.clientSession.inputCaptureEnabled ? 1 : 0,
+                      self.clientSession.isOverlayActive ? 1 : 0)
             }
             
-            // Check if event is for our window
-            guard event.window == window else { return event }
+            guard isOurs else { return event }
+            guard self.clientSession.inputCaptureEnabled else { return event }
+            if self.clientSession.isOverlayActive { return event }
             
-            // Get location relative to the content view (where the video is)
-            if let contentView = window.contentView {
-                let point = contentView.convert(event.locationInWindow, from: nil)
-                self.handleMouseEvent(event, at: point)
+            guard let contentView = window.contentView else { return event }
+            let contentHeight = contentView.frame.height
+            let y = event.locationInWindow.y
+            
+            let isInToolbar = y > (contentHeight - self.toolbarRegionHeight)
+            let isInBottomBar = y < self.bottomBarRegionHeight
+            if isInToolbar || isInBottomBar {
+                if self.diagCount <= 20 { NSLog("🖱️ PASS-THROUGH: toolbar=%d bottomBar=%d y=%.0f h=%.0f", isInToolbar ? 1 : 0, isInBottomBar ? 1 : 0, y, contentHeight) }
+                return event
             }
             
-            return event
+            let point = contentView.convert(event.locationInWindow, from: nil)
+            self.handleMouseEvent(event, at: point)
+            if self.diagCount <= 20 { NSLog("🖱️ FORWARDED to remote at (%.2f, %.2f)", point.x / contentView.frame.width, point.y / contentView.frame.height) }
+            return nil
         }
         
         let keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
@@ -139,104 +149,56 @@ class LocalCastViewerWindowController: NSWindowController, ClientSessionDelegate
             guard let window = self.window else { return event }
             guard event.window == window else { return event }
             
-            self.handleKeyEvent(event)
-            
-            // Consume keyboard events to prevent system beeps
-            return nil 
-        }
-        
-        // Also add global monitor for when window might not be getting events properly
-        // This catches events that go to child views/SwiftUI layers
-        let globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp]) { [weak self] event in
-            guard let self = self else { return }
-            guard let window = self.window else { return }
-            
-            // Get mouse location in screen coordinates
-            let mouseLocation = NSEvent.mouseLocation
-            let windowFrame = window.frame
-            
-            // Check if click is inside our window
-            if NSPointInRect(mouseLocation, windowFrame) {
-                if let contentView = window.contentView {
-                    let windowPoint = window.convertPoint(fromScreen: mouseLocation)
-                    let point = contentView.convert(windowPoint, from: nil)
-                    
-                    // Calculate normalized coordinates
-                    let contentRect = contentView.frame
-                    guard point.x >= 0 && point.x <= contentRect.width &&
-                          point.y >= 0 && point.y <= contentRect.height else { return }
-                    
-                    let relativeX = point.x / contentRect.width
-                    let relativeY = 1.0 - (point.y / contentRect.height)
-                    
-                    // Send the input via global monitor (backup path)
-                    switch event.type {
-                    case .leftMouseDown:
-                        print("🎮 GLOBAL: LEFT MOUSE DOWN at (\(String(format: "%.2f", relativeX)), \(String(format: "%.2f", relativeY)))")
-                        self.clientSession.sendInput(.mouseDown(button: 0, x: relativeX, y: relativeY))
-                    case .leftMouseUp:
-                        print("🎮 GLOBAL: LEFT MOUSE UP at (\(String(format: "%.2f", relativeX)), \(String(format: "%.2f", relativeY)))")
-                        self.clientSession.sendInput(.mouseUp(button: 0, x: relativeX, y: relativeY))
-                    case .rightMouseDown:
-                        print("🎮 GLOBAL: RIGHT MOUSE DOWN")
-                        self.clientSession.sendInput(.mouseDown(button: 1, x: relativeX, y: relativeY))
-                    case .rightMouseUp:
-                        print("🎮 GLOBAL: RIGHT MOUSE UP")
-                        self.clientSession.sendInput(.mouseUp(button: 1, x: relativeX, y: relativeY))
-                    default:
-                        break
-                    }
+            // Cmd+Shift+I toggles input capture
+            if event.type == .keyDown,
+               event.modifierFlags.contains(.command),
+               event.modifierFlags.contains(.shift),
+               event.keyCode == 34 {
+                DispatchQueue.main.async {
+                    self.clientSession.inputCaptureEnabled.toggle()
                 }
+                return nil
             }
+            
+            guard self.clientSession.inputCaptureEnabled else { return event }
+            if self.clientSession.isOverlayActive { return event }
+            
+            self.handleKeyEvent(event)
+            return nil
         }
         
         localMonitors.append(mouseMonitor as Any)
         localMonitors.append(keyMonitor as Any)
-        localMonitors.append(globalMouseMonitor as Any)
-        print("🎮 LocalCastViewer: Input capture set up ✓ (local + global monitors)")
     }
     
     private func handleMouseEvent(_ event: NSEvent, at point: NSPoint) {
         guard let window = self.window, let contentView = window.contentView else { return }
         
         let contentRect = contentView.frame
-        
-        // Ensure point is within bounds
         guard point.x >= 0 && point.x <= contentRect.width &&
-              point.y >= 0 && point.y <= contentRect.height else {
-            return
-        }
+              point.y >= 0 && point.y <= contentRect.height else { return }
         
-        // Translate point to 0...1 relative (normalized) coordinates
         let relativeX = point.x / contentRect.width
-        let relativeY = 1.0 - (point.y / contentRect.height) // Flip Y (0 is top)
-        
-        inputCaptureCount += 1
+        let relativeY: Double
+        if contentView.isFlipped {
+            relativeY = point.y / contentRect.height
+        } else {
+            relativeY = 1.0 - (point.y / contentRect.height)
+        }
         
         switch event.type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged:
             clientSession.sendInput(.mouseMove(x: relativeX, y: relativeY))
-            
         case .leftMouseDown:
-            print("🖱️ LocalCastViewer: LEFT MOUSE DOWN at (\(String(format: "%.2f", relativeX)), \(String(format: "%.2f", relativeY)))")
             clientSession.sendInput(.mouseDown(button: 0, x: relativeX, y: relativeY))
-            
         case .leftMouseUp:
-            print("🖱️ LocalCastViewer: LEFT MOUSE UP at (\(String(format: "%.2f", relativeX)), \(String(format: "%.2f", relativeY)))")
             clientSession.sendInput(.mouseUp(button: 0, x: relativeX, y: relativeY))
-            
         case .rightMouseDown:
-            print("🖱️ LocalCastViewer: RIGHT MOUSE DOWN")
             clientSession.sendInput(.mouseDown(button: 1, x: relativeX, y: relativeY))
-            
         case .rightMouseUp:
-            print("🖱️ LocalCastViewer: RIGHT MOUSE UP")
             clientSession.sendInput(.mouseUp(button: 1, x: relativeX, y: relativeY))
-            
         case .scrollWheel:
-            // Scroll delta doesn't need normalization
             clientSession.sendInput(.scroll(deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY))
-            
         default:
             break
         }
@@ -248,15 +210,11 @@ class LocalCastViewerWindowController: NSWindowController, ClientSessionDelegate
         
         switch event.type {
         case .keyDown:
-            print("⌨️ LocalCastViewer: KEY DOWN keyCode=\(keyCode)")
             clientSession.sendInput(.keyDown(keyCode: keyCode, modifiers: UInt64(modifiers)))
         case .keyUp:
-            print("⌨️ LocalCastViewer: KEY UP keyCode=\(keyCode)")
             clientSession.sendInput(.keyUp(keyCode: keyCode, modifiers: UInt64(modifiers)))
         case .flagsChanged:
-            // This is tricky as we don't know if it's down or up easily without tracking state
-            // For now, let's just send as a keyDown if any flags are set, but this needs improvement
-            break
+            clientSession.sendInput(.keyDown(keyCode: keyCode, modifiers: UInt64(modifiers)))
         default:
             break
         }
@@ -268,6 +226,8 @@ class LocalCastViewerWindowController: NSWindowController, ClientSessionDelegate
         }
         localMonitors.removeAll()
         clientSession.disconnect()
+        onClose?(self)
+        onClose = nil
         super.close()
     }
     
@@ -300,19 +260,24 @@ extension LocalCastViewerWindowController: NSWindowDelegate {
 struct LocalCastContentView: View {
     let mtkView: MTKView
     @ObservedObject var session: ClientSession
+    @ObservedObject var tuning: StreamingTuning
     @AppStorage("showLatencyOverlay") var showOverlay = false
     @State private var toolbarExpanded = false
     @State private var showAppPicker = false
+    @State private var showQualityPanel = false
     @State private var selectedRemoteApp: RemoteAppInfo?
     
     var body: some View {
         ZStack {
             MetalViewRepresentable(mtkView: mtkView)
             
+            if !session.isConnected {
+                connectionStatusOverlay
+            }
+            
             // Top edge: collapsible toolbar
             VStack(spacing: 0) {
                 if toolbarExpanded {
-                    // Expanded toolbar
                     HStack {
                         Button {
                             if session.remoteApps.isEmpty {
@@ -329,6 +294,34 @@ struct LocalCastContentView: View {
                         }
                         .buttonStyle(.bordered)
                         
+                        CompactQualitySlider(tuning: tuning, isLive: true)
+                        
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showQualityPanel.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Quality Controls")
+                        
+                        Button {
+                            session.inputCaptureEnabled.toggle()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: session.inputCaptureEnabled ? "keyboard.fill" : "keyboard")
+                                Text(session.inputCaptureEnabled ? "Control" : "View Only")
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(session.inputCaptureEnabled ? .blue : .gray)
+                        .help("Toggle remote input (⌘⇧I)")
+                        
                         Spacer()
                         
                         if showOverlay {
@@ -341,7 +334,6 @@ struct LocalCastContentView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 
-                // Toggle tab — always visible
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         toolbarExpanded.toggle()
@@ -365,7 +357,6 @@ struct LocalCastContentView: View {
                 Spacer()
             }
             .background(alignment: .top) {
-                // Material backdrop covers only the toolbar area
                 if toolbarExpanded {
                     Rectangle()
                         .fill(.ultraThinMaterial)
@@ -382,7 +373,102 @@ struct LocalCastContentView: View {
                     selectedApp: $selectedRemoteApp
                 )
             }
+            
+            // Quality control panel
+            if showQualityPanel {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Quality Controls")
+                            .font(.headline)
+                        Spacer()
+                        Button {
+                            withAnimation { showQualityPanel = false }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .padding()
+                    
+                    Divider()
+                    
+                    ScrollView {
+                        StreamingQualityControlView(tuning: tuning, isLive: true)
+                            .padding()
+                    }
+                }
+                .frame(idealWidth: 400, maxHeight: 500)
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .shadow(radius: 20)
+                .padding(40)
+            }
+            
+            // Bottom status bar
+            VStack {
+                Spacer()
+                bottomStatusBar
+            }
         }
+        .onChange(of: showAppPicker) { _ in syncOverlayState() }
+        .onChange(of: showQualityPanel) { _ in syncOverlayState() }
+        .onReceive(tuning.objectWillChange.debounce(for: .milliseconds(200), scheduler: DispatchQueue.main)) { _ in
+            DispatchQueue.main.async {
+                session.sendQualityUpdate(tuning)
+            }
+        }
+    }
+    
+    private func syncOverlayState() {
+        session.isOverlayActive = showAppPicker || showQualityPanel
+    }
+    
+    @ViewBuilder
+    private var bottomStatusBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                if session.remoteApps.isEmpty {
+                    session.requestAppList()
+                }
+                showAppPicker.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: session.streamingTargetName == "Full Display" ? "display" : "app.fill")
+                        .font(.caption)
+                    Text(session.streamingTargetName)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(.white.opacity(0.9))
+            }
+            .buttonStyle(.plain)
+            
+            Rectangle()
+                .fill(.white.opacity(0.3))
+                .frame(width: 1, height: 12)
+            
+            Button {
+                session.inputCaptureEnabled.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: session.inputCaptureEnabled ? "keyboard.fill" : "keyboard")
+                        .font(.caption)
+                    Text(session.inputCaptureEnabled ? "Remote Control" : "View Only")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(session.inputCaptureEnabled ? .white : .white.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            
+            Text("⌘⇧I")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.35))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(.black.opacity(0.55), in: Capsule())
+        .padding(.bottom, 8)
     }
 }
 
@@ -483,6 +569,9 @@ struct RemoteAppPickerView: View {
                                         }
                                     }
                                 },
+                                onFocusApp: {
+                                    session.requestFocusApp(processID: app.processID, appName: app.name)
+                                },
                                 onStreamApp: {
                                     session.requestStreamApp(processID: app.processID, appName: app.name)
                                     isPresented = false
@@ -510,6 +599,7 @@ struct RemoteAppRowView: View {
     let app: RemoteAppInfo
     let isExpanded: Bool
     let onTap: () -> Void
+    let onFocusApp: (() -> Void)?
     let onStreamApp: () -> Void
     let onStreamWindow: (RemoteWindowInfo) -> Void
     
@@ -532,6 +622,18 @@ struct RemoteAppRowView: View {
                     }
                     
                     Spacer()
+                    
+                    // Focus button (bring to front on host)
+                    if let onFocus = onFocusApp {
+                        Button {
+                            onFocus()
+                        } label: {
+                            Image(systemName: "arrow.up.forward.app")
+                                .foregroundStyle(.blue)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Bring to front on remote Mac")
+                    }
                     
                     // Stream whole app button
                     Button {
@@ -589,6 +691,71 @@ struct RemoteAppRowView: View {
                 }
             }
         }
+    }
+}
+
+extension LocalCastContentView {
+    @ViewBuilder
+    var connectionStatusOverlay: some View {
+        VStack(spacing: 16) {
+            // Phase icon
+            Group {
+                switch session.connectionPhase {
+                case .resolving, .connecting:
+                    ProgressView()
+                        .scaleEffect(1.5)
+                case .authenticating:
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.yellow)
+                case .waitingForVideo:
+                    ProgressView()
+                        .scaleEffect(1.5)
+                case .firewallBlocked:
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.orange)
+                case .videoTimeout:
+                    Image(systemName: "video.slash")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.yellow)
+                case .noRoute:
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.red)
+                default:
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            
+            Text(session.connectionPhase.rawValue)
+                .font(.system(.body, design: .rounded))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.primary)
+            
+            // Extra guidance for firewall issues
+            if session.connectionPhase == .firewallBlocked {
+                VStack(spacing: 8) {
+                    Text("On the host Mac, open:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("System Settings → Network → Firewall")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.secondary)
+                    Text("Either turn off the firewall or add TidalDrift to the allowed apps list.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.top, 4)
+            }
+        }
+        .padding(32)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .frame(maxWidth: 400)
     }
 }
 

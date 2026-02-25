@@ -1,5 +1,6 @@
 import SwiftUI
 import OSLog
+import ApplicationServices
 
 struct StatusCardView: View {
     @EnvironmentObject var appState: AppState
@@ -132,17 +133,31 @@ struct StatusCardView: View {
                 }
             }
             
-            // Show auth status when hosting
-            if localCast.isHosting {
+            // Show encrypted badge when auth is active
+            if localCast.isHosting && localCast.isAuthEnabled {
                 HStack(spacing: 4) {
-                    Image(systemName: localCast.isAuthEnabled ? "lock.fill" : "lock.open")
+                    Image(systemName: "lock.fill")
                         .font(.caption2)
-                        .foregroundColor(localCast.isAuthEnabled ? .green : .secondary)
-                    Text(localCast.isAuthEnabled ? "Encrypted" : "No auth")
+                        .foregroundColor(.green)
+                    Text("Encrypted")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     Spacer()
                 }
+            }
+            
+            // Accessibility permission (required for remote input control)
+            HStack {
+                Text("Input Control")
+                    .font(.caption)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { appState.accessibilityGranted },
+                    set: { _ in toggleAccessibility() }
+                ))
+                .toggleStyle(.switch)
+                .scaleEffect(0.7)
+                .frame(width: 40)
             }
         }
     }
@@ -182,6 +197,44 @@ struct StatusCardView: View {
         }
     }
 
+    private func toggleAccessibility() {
+        if appState.accessibilityGranted {
+            // Already granted — open System Settings so user can manually remove it
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        } else {
+            // Not granted or stale from a previous build.
+            // Reset the TCC entry to clear sticky permissions from old binaries,
+            // then re-prompt. This forces macOS to forget the old association.
+            Task.detached {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+                process.arguments = ["reset", "Accessibility", "com.goldbergconsulting.tidaldrift"]
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                try? process.run()
+                process.waitUntilExit()
+                
+                // Now prompt — this opens the System Settings dialog
+                await MainActor.run {
+                    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                    AXIsProcessTrustedWithOptions(options)
+                }
+                
+                // Poll for a few seconds to detect when the user grants it
+                for _ in 0..<15 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    let granted = AXIsProcessTrusted()
+                    await MainActor.run {
+                        self.appState.accessibilityGranted = granted
+                    }
+                    if granted { break }
+                }
+            }
+        }
+    }
+    
     private func toggleScreenSharing() {
         isTogglingScreen = true
         Task {

@@ -130,7 +130,12 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
     
     // MARK: - Single App Capture
     
-    /// Start capturing all windows of a specific application
+    /// Start capturing a specific application by capturing its largest visible window.
+    ///
+    /// Uses `desktopIndependentWindow` (the same approach as single-window capture)
+    /// instead of `display+including+sourceRect`. This guarantees the video output
+    /// is perfectly cropped to the window content, and `captureBounds` (window.frame)
+    /// maps directly to Quartz global coordinates for accurate cursor injection.
     func startAppCapture(processID: pid_t, frameRate: Int = 30, maxDimension: Int = 2560) async throws {
         logger.info("Starting app capture for PID: \(processID)")
         
@@ -142,47 +147,55 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
             throw error
         }
         
-        guard let app = content.applications.first(where: { $0.processID == processID }) else {
+        guard content.applications.first(where: { $0.processID == processID }) != nil else {
             logger.error("App with PID \(processID) not found")
             throw WindowCaptureError.appNotFound
         }
         
-        guard let display = content.displays.first else {
-            logger.error("No display found")
-            throw LocalCastError.noDisplayAvailable
+        // Find the app's largest on-screen window (by area) to use as the capture target.
+        let appWindows = content.windows.filter {
+            $0.owningApplication?.processID == processID && $0.isOnScreen && $0.frame.width > 0 && $0.frame.height > 0
         }
         
-        logger.info("Found app: '\(app.applicationName)' with display \(display.displayID)")
-        
-        let filter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
-        
-        let appWindows = content.windows.filter { $0.owningApplication?.processID == processID && $0.isOnScreen }
-        let bounds = appWindows.reduce(CGRect.null) { result, window in
-            result.union(window.frame)
+        guard let mainWindow = appWindows.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) else {
+            logger.error("No visible windows found for PID \(processID)")
+            throw WindowCaptureError.windowNotFound
         }
         
-        // bounds are in points -- convert to pixels for Retina fidelity
+        logger.info("📱 App capture: using window '\(mainWindow.title ?? "Untitled")' (ID: \(mainWindow.windowID)) frame: \(NSStringFromRect(mainWindow.frame))")
+        
+        // Log CGWindowListCopyWindowInfo bounds for coordinate system verification.
+        // SCWindow.frame should match kCGWindowBounds (both Quartz: top-left origin, Y-down).
+        if let infoList = CGWindowListCopyWindowInfo(.optionIncludingWindow, mainWindow.windowID) as? [[String: Any]],
+           let info = infoList.first,
+           let boundsDict = info[kCGWindowBounds as String] as? NSDictionary {
+            var cgRect = CGRect.zero
+            if CGRectMakeWithDictionaryRepresentation(boundsDict, &cgRect) {
+                logger.info("📱 CGWindowList bounds (Quartz): \(NSStringFromRect(cgRect))")
+                logger.info("📱 SCWindow.frame:               \(NSStringFromRect(mainWindow.frame))")
+                if cgRect != mainWindow.frame {
+                    logger.warning("⚠️ SCWindow.frame and CGWindowList bounds DIFFER — coordinate system mismatch!")
+                }
+            }
+        }
+        
+        // Use desktopIndependentWindow — automatically crops to window content,
+        // no sourceRect needed, proven approach matching startWindowCapture.
+        let filter = SCContentFilter(desktopIndependentWindow: mainWindow)
+        
         let retinaScale = NSScreen.main?.backingScaleFactor ?? 2.0
-        let width: Int
-        let height: Int
+        let pixelWidth = mainWindow.frame.width * retinaScale
+        let pixelHeight = mainWindow.frame.height * retinaScale
+        let scale = min(1.0, Double(maxDimension) / Double(max(pixelWidth, pixelHeight)))
+        // Round to even numbers (required for video encoding)
+        let width = Int(pixelWidth * scale) & ~1
+        let height = Int(pixelHeight * scale) & ~1
         
-        if bounds.isNull || bounds.isEmpty {
-            width = 1920
-            height = 1080
-            captureBounds = nil  // Use full screen mapping
-        } else {
-            let pixelWidth = bounds.width * retinaScale
-            let pixelHeight = bounds.height * retinaScale
-            let scale = min(1.0, Double(maxDimension) / Double(max(pixelWidth, pixelHeight)))
-            // Round to even numbers (required for video encoding)
-            width = Int(pixelWidth * scale) & ~1
-            height = Int(pixelHeight * scale) & ~1
-            captureBounds = bounds
-            logger.info("📱 App capture bounds: \(NSStringFromRect(bounds)) -> \(width)x\(height) pixels (retina: \(retinaScale)x)")
-        }
-        
+        captureBounds = mainWindow.frame
         captureMode = .singleApp(processID)
-        try await startStream(with: filter, width: width, height: height, frameRate: frameRate, description: "app '\(app.applicationName)'")
+        
+        logger.info("📱 App capture bounds: \(NSStringFromRect(mainWindow.frame)) -> \(width)x\(height) pixels (retina: \(retinaScale)x)")
+        try await startStream(with: filter, width: width, height: height, frameRate: frameRate, description: "app '\(mainWindow.title ?? "PID \(processID)")'")
     }
     
     // MARK: - Shared Stream Setup
@@ -196,7 +209,7 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
         config.width = width
         config.height = height
         config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(frameRate))
-        config.queueDepth = 5
+        config.queueDepth = 5  // Enough frames queued for consistent 60 FPS delivery
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.colorSpaceName = CGColorSpace.sRGB
         config.showsCursor = true
@@ -218,6 +231,29 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
         } catch {
             logger.error("Failed to start capture: \(error.localizedDescription)")
             throw error
+        }
+    }
+    
+    /// Update the capture frame rate live without stopping/restarting the stream.
+    /// Uses `SCStream.updateConfiguration()` on macOS 14+; no-op on older versions.
+    func updateFrameRate(_ fps: Int) async {
+        guard let stream = stream else {
+            logger.warning("updateFrameRate: no active stream")
+            return
+        }
+        
+        if #available(macOS 14.0, *) {
+            let config = SCStreamConfiguration()
+            config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
+            
+            do {
+                try await stream.updateConfiguration(config)
+                logger.info("Live capture update: fps → \(fps)")
+            } catch {
+                logger.warning("Failed to update capture frame rate: \(error.localizedDescription)")
+            }
+        } else {
+            logger.info("Live capture fps update requires macOS 14+ (current frame rate unchanged)")
         }
     }
     
