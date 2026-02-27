@@ -171,13 +171,15 @@ class LocalCastService: ObservableObject {
     }
 
     func stopHosting() {
+        guard isHosting else { return }
         self.isHosting = false
         self.isAuthEnabled = false
         stopAdvertisement()
 
+        let session = self.hostSession
+        self.hostSession = nil
         Task {
-            await hostSession?.stop()
-            await MainActor.run { self.hostSession = nil }
+            await session?.stop()
         }
 
         delegate?.localCastDidStopHosting()

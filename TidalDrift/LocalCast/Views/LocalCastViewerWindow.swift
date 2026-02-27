@@ -220,6 +220,14 @@ class LocalCastViewerWindowController: NSWindowController, ClientSessionDelegate
         }
     }
     
+    deinit {
+        for monitor in localMonitors {
+            NSEvent.removeMonitor(monitor)
+        }
+        localMonitors.removeAll()
+        clientSession.disconnect()
+    }
+    
     override func close() {
         for monitor in localMonitors {
             NSEvent.removeMonitor(monitor)

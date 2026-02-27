@@ -50,6 +50,10 @@ class AppControlPanelController: NSWindowController {
         fatalError("init(coder:) not implemented")
     }
     
+    deinit {
+        session.disconnect()
+    }
+    
     override func close() {
         session.disconnect()
         onClose?(self)
@@ -60,9 +64,12 @@ class AppControlPanelController: NSWindowController {
 
 extension AppControlPanelController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
-        session.disconnect()
-        onClose?(self)
-        onClose = nil
+        // close() handles cleanup; this fires for user-initiated close via title bar
+        if onClose != nil {
+            session.disconnect()
+            onClose?(self)
+            onClose = nil
+        }
     }
 }
 

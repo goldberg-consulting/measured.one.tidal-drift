@@ -245,10 +245,10 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         // Decrypt the session key
         guard let sessionKeyData = SessionCrypto.decrypt(encryptedSessionKey, using: pairingKey) else {
             logger.warning("🔐 Failed to decrypt session key — wrong password?")
-            DispatchQueue.main.async {
-                self.authError = "Authentication failed — wrong password"
-                self.isAuthenticating = false
-                self.connectionStatus = "Auth failed"
+            DispatchQueue.main.async { [weak self] in
+                self?.authError = "Authentication failed — wrong password"
+                self?.isAuthenticating = false
+                self?.connectionStatus = "Auth failed"
             }
             return
         }
@@ -291,14 +291,21 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         
         logger.info("🔐 ✅ Authenticated — encryption enabled")
         
-        DispatchQueue.main.async {
-            self.isAuthenticating = false
-            self.authError = nil
-            self.connectionStatus = "Authenticated"
+        DispatchQueue.main.async { [weak self] in
+            self?.isAuthenticating = false
+            self?.authError = nil
+            self?.connectionStatus = "Authenticated"
         }
         
         // Start the normal post-auth flow
         startPostAuthFlow()
+    }
+    
+    deinit {
+        heartbeatTimer?.invalidate()
+        diagnosticTimer?.invalidate()
+        transport.stopListening()
+        decoder.invalidate()
     }
     
     func disconnect() {
@@ -396,8 +403,8 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         
         print("📋 ClientSession: Requesting app list from host...")
         
-        DispatchQueue.main.async {
-            self.isLoadingApps = true
+        DispatchQueue.main.async { [weak self] in
+            self?.isLoadingApps = true
         }
         
         let packet = LocalCastPacket(
@@ -619,11 +626,11 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             
             // Update connected state on first frame
             if !isConnected {
-                DispatchQueue.main.async {
-                    self.isConnected = true
-                    self.connectionPhase = .streaming
-                    self.connectionStatus = "Streaming"
-                    self.logger.info("LocalCast: First video frame received - connected!")
+                DispatchQueue.main.async { [weak self] in
+                    self?.isConnected = true
+                    self?.connectionPhase = .streaming
+                    self?.connectionStatus = "Streaming"
+                    self?.logger.info("LocalCast: First video frame received - connected!")
                 }
             }
             
@@ -634,11 +641,11 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
                 frameCount = 0
                 lastStatsUpdate = now
                 
-                DispatchQueue.main.async {
-                    self.stats = LocalCastStats(
-                        latencyMs: 0, // TODO: Calculate from heartbeat RTT
+                DispatchQueue.main.async { [weak self] in
+                    self?.stats = LocalCastStats(
+                        latencyMs: 0,
                         fps: fps,
-                        bitrateMbps: 0 // TODO: Calculate from data rate
+                        bitrateMbps: 0
                     )
                 }
             }
@@ -648,7 +655,8 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             lastHeartbeatResponse = Date()
             heartbeatsReceived += 1
             if !isConnected {
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
                     if self.connectionPhase == .connecting || self.connectionPhase == .firewallBlocked {
                         self.connectionPhase = .waitingForVideo
                         self.connectionStatus = ConnectionPhase.waitingForVideo.rawValue
@@ -691,15 +699,16 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             let apps = try JSONDecoder().decode([RemoteAppInfo].self, from: payload)
             print("📋 ClientSession: Decoded \(apps.count) remote apps")
             
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
                 self.remoteApps = apps
                 self.isLoadingApps = false
                 self.delegate?.clientSession(self, didReceiveAppList: apps)
             }
         } catch {
             print("❌ ClientSession: Failed to decode app list: \(error)")
-            DispatchQueue.main.async {
-                self.isLoadingApps = false
+            DispatchQueue.main.async { [weak self] in
+                self?.isLoadingApps = false
             }
         }
     }
@@ -719,7 +728,8 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
                 requestKeyFrame()
             }
             
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
                 self.delegate?.clientSession(self, didReceiveStreamResponse: response)
                 
                 if response.success {
@@ -745,7 +755,8 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         
         if remoteResolution == nil || remoteResolution != size {
             remoteResolution = size
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
                 self.delegate?.clientSession(self, didUpdateResolution: size)
             }
         }
