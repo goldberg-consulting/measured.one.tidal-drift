@@ -471,6 +471,12 @@ class TidalDropService: ObservableObject {
             }
             
             let metadataSize = Int(d.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian })
+            
+            guard metadataSize > 0 && metadataSize <= 1_048_576 else {
+                print("❌ TidalDrop: Metadata size out of bounds: \(metadataSize)")
+                connection.cancel()
+                return
+            }
             print("🌊 TidalDrop: Metadata size: \(metadataSize) bytes")
             
             // 2. Receive metadata JSON
@@ -495,9 +501,23 @@ class TidalDropService: ObservableObject {
         }
     }
     
+    /// Sanitize a filename received from the network to prevent path traversal.
+    private static func sanitizeFilename(_ raw: String) -> String? {
+        let name = URL(fileURLWithPath: raw).lastPathComponent
+        if name.isEmpty || name == "." || name == ".." { return nil }
+        if name.hasPrefix(".") { return nil }
+        return name
+    }
+    
     private func setupIncomingTransfer(_ connection: NWConnection, metadata: FileMetadata, remoteIP: String) {
         let transferId = UUID()
         let destinationFolder = AppState.shared.settings.tidalDropFolder
+        
+        guard let safeName = Self.sanitizeFilename(metadata.fileName) else {
+            print("❌ TidalDrop: Rejected unsafe filename: \(metadata.fileName)")
+            connection.cancel()
+            return
+        }
         
         print("🌊 TidalDrop: Setting up incoming transfer from \(remoteIP)")
         print("   Destination folder: \(destinationFolder.path)")
@@ -510,7 +530,7 @@ class TidalDropService: ObservableObject {
             print("❌ TidalDrop: Failed to create destination folder: \(error)")
         }
         
-        let fileURL = destinationFolder.appendingPathComponent(metadata.fileName)
+        let fileURL = destinationFolder.appendingPathComponent(safeName)
         print("   File will be saved to: \(fileURL.path)")
         
         let transfer = DropTransfer(

@@ -2,17 +2,49 @@ import Foundation
 import Network
 import SystemConfiguration
 
-/// Thread-safe flag for use in concurrent contexts (Swift 6 compatible)
+/// Thread-safe flag for use in concurrent contexts (Swift 6 compatible).
+/// Guards withCheckedContinuation callbacks against double-resume crashes.
 final class AtomicFlag: @unchecked Sendable {
     private var _value: Bool
+    private let lock = os_unfair_lock_t.allocate(capacity: 1)
     
     init(_ initialValue: Bool = false) {
         _value = initialValue
+        lock.initialize(to: os_unfair_lock())
+    }
+    
+    deinit {
+        lock.deinitialize(count: 1)
+        lock.deallocate()
     }
     
     var value: Bool {
-        get { _value }
-        set { _value = newValue }
+        get {
+            os_unfair_lock_lock(lock)
+            let v = _value
+            os_unfair_lock_unlock(lock)
+            return v
+        }
+        set {
+            os_unfair_lock_lock(lock)
+            _value = newValue
+            os_unfair_lock_unlock(lock)
+        }
+    }
+    
+    /// Atomically checks if value is `expected`, sets it to `desired` if so.
+    /// Returns true if the swap happened. Use this to safely guard
+    /// one-shot operations (e.g. continuation.resume).
+    @discardableResult
+    func compareAndSwap(expected: Bool, desired: Bool) -> Bool {
+        os_unfair_lock_lock(lock)
+        if _value == expected {
+            _value = desired
+            os_unfair_lock_unlock(lock)
+            return true
+        }
+        os_unfair_lock_unlock(lock)
+        return false
     }
 }
 

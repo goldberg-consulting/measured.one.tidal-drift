@@ -41,6 +41,13 @@ class ScreenCaptureManager: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream?
     private let captureQueue = DispatchQueue(label: "com.tidaldrift.localcast.capture", qos: .userInteractive)
     
+    deinit {
+        if let stream = stream {
+            stream.stopCapture { _ in }
+        }
+        stream = nil
+    }
+    
     /// Current capture mode
     private(set) var captureMode: CaptureMode?
     

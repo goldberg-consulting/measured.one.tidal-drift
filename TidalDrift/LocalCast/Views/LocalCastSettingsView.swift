@@ -7,8 +7,9 @@ struct LocalCastSettingsView: View {
     @AppStorage("showLatencyOverlay") var showOverlay = false
     @AppStorage("localCastAutoHost") var autoHost = false
     @AppStorage("localCastRequireAuth") var requireAuth = true
-    @AppStorage("localCastHostPassword") var hostPassword = ""
     @AppStorage("localCastInputRateLimit") var inputRateLimit = 120
+    
+    @State private var hostPassword = ""
     
     @StateObject private var permissions = LocalCastPermissions()
     @ObservedObject private var service = LocalCastService.shared
@@ -159,6 +160,10 @@ struct LocalCastSettingsView: View {
         }
         .task {
             await permissions.checkPermissions()
+            hostPassword = LocalCastPasswordStore.load() ?? ""
+        }
+        .onChange(of: hostPassword) { newValue in
+            LocalCastPasswordStore.save(newValue)
         }
     }
 }

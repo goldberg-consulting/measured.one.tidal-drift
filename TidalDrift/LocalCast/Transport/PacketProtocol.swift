@@ -24,13 +24,15 @@ struct LocalCastPacket {
         case qualityUpdate = 19       // Client sends streaming quality tuning snapshot to host
     }
     
+    static let headerSize = 13 // 1 (type) + 4 (seq) + 8 (timestamp)
+    
     let type: PacketType
     let sequenceNumber: UInt32
     let timestamp: TimeInterval
     let payload: Data
     
     func serialize() -> Data {
-        var data = Data()
+        var data = Data(capacity: Self.headerSize + payload.count)
         data.append(type.rawValue)
         
         var seq = sequenceNumber.bigEndian
@@ -44,16 +46,19 @@ struct LocalCastPacket {
     }
     
     static func deserialize(_ data: Data) -> LocalCastPacket? {
-        guard data.count >= 13 else { return nil }
+        guard data.count >= headerSize else { return nil }
         
-        guard let type = PacketType(rawValue: data[0]) else { return nil }
-        
-        let seq = data.subdata(in: 1..<5).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-        let tsBits = data.subdata(in: 5..<13).withUnsafeBytes { $0.load(as: UInt64.self).bigEndian }
-        let ts = Double(bitPattern: tsBits)
-        
-        let payload = data.subdata(in: 13..<data.count)
-        
-        return LocalCastPacket(type: type, sequenceNumber: seq, timestamp: ts, payload: payload)
+        return data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> LocalCastPacket? in
+            guard let base = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return nil }
+            guard let packetType = PacketType(rawValue: base[0]) else { return nil }
+            
+            let seq = UInt32(base[1]) << 24 | UInt32(base[2]) << 16 | UInt32(base[3]) << 8 | UInt32(base[4])
+            let tsBits = UInt64(base[5]) << 56 | UInt64(base[6]) << 48 | UInt64(base[7]) << 40 | UInt64(base[8]) << 32
+                       | UInt64(base[9]) << 24 | UInt64(base[10]) << 16 | UInt64(base[11]) << 8 | UInt64(base[12])
+            let ts = Double(bitPattern: tsBits)
+            
+            let payload = data.dropFirst(headerSize)
+            return LocalCastPacket(type: packetType, sequenceNumber: seq, timestamp: ts, payload: Data(payload))
+        }
     }
 }

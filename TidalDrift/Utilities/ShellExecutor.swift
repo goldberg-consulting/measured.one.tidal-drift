@@ -66,15 +66,6 @@ struct ShellExecutor {
         }
     }
     
-    /// Execute with sudo - NOTE: This function is deprecated and should not be used with user input
-    /// Only use with hardcoded, trusted commands
-    @available(*, deprecated, message: "Use AppleScript with administrator privileges instead")
-    static func executeWithSudo(_ command: String, password: String) -> (output: String, exitCode: Int32) {
-        // This is inherently insecure - prefer using AppleScript with admin privileges
-        let escapedPassword = password.replacingOccurrences(of: "'", with: "'\\''")
-        let sudoCommand = "echo '\(escapedPassword)' | sudo -S \(command)"
-        return execute(sudoCommand)
-    }
     
     static func checkCommandExists(_ command: String) -> Bool {
         // Sanitize command name to prevent injection

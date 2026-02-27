@@ -4,48 +4,47 @@ import Network
 extension TidalDriftTestRunner {
     
     func testUDPPortBind() async -> (Bool, String) {
-        await testPortBind(label: "UDP", params: .udp, port: 15904)
+        testBSDSocketBind(label: "UDP", type: SOCK_DGRAM, port: 15904)
     }
     
     func testTCPPortBind() async -> (Bool, String) {
-        await testPortBind(label: "TCP", params: .tcp, port: 15902)
+        testBSDSocketBind(label: "TCP", type: SOCK_STREAM, port: 15902)
     }
     
-    private func testPortBind(label: String, params: NWParameters, port: UInt16) async -> (Bool, String) {
-        do {
-            let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
-            
-            let result = await withCheckedContinuation { (continuation: CheckedContinuation<NWListener.State, Never>) in
-                var resumed = false
-                listener.stateUpdateHandler = { state in
-                    guard !resumed else { return }
-                    switch state {
-                    case .ready, .failed, .cancelled:
-                        resumed = true
-                        continuation.resume(returning: state)
-                    default:
-                        break
-                    }
-                }
-                listener.start(queue: DispatchQueue(label: "test.\(label.lowercased()).bind"))
-                
-                // Timeout after 5 seconds
-                DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
-                    guard !resumed else { return }
-                    resumed = true
-                    continuation.resume(returning: .cancelled)
-                }
-            }
-            
-            listener.cancel()
-            
-            if case .ready = result {
-                return (true, "Successfully bound \(label) on port \(port)")
-            }
-            return (false, "\(label) listener reached state \(result) instead of ready on port \(port)")
-        } catch {
-            return (false, "Cannot bind \(label) port \(port): \(error.localizedDescription)")
+    /// Tests port binding using BSD sockets on loopback.
+    /// NWListener requires Local Network permission (which the build script resets),
+    /// so we use raw sockets to test the kernel's ability to bind without needing
+    /// any TCC entitlement.
+    private func testBSDSocketBind(label: String, type: Int32, port: UInt16) -> (Bool, String) {
+        let sock = socket(AF_INET, type, 0)
+        guard sock >= 0 else {
+            return (false, "\(label) socket() failed: errno \(errno)")
         }
+        defer { close(sock) }
+        
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr.s_addr = UInt32(INADDR_LOOPBACK).bigEndian
+        
+        let result = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                bind(sock, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        
+        if result == 0 {
+            return (true, "\(label) bound to loopback:\(port)")
+        }
+        let err = errno
+        let msg: String
+        switch err {
+        case EADDRINUSE: msg = "port already in use"
+        case EACCES:     msg = "permission denied"
+        default:         msg = "errno \(err)"
+        }
+        return (false, "\(label) bind failed on loopback:\(port) — \(msg)")
     }
     
     func testLoopbackTCPRoundtrip() async -> (Bool, String) {
@@ -53,10 +52,11 @@ extension TidalDriftTestRunner {
         let testPayload = "TidalDrift-TCP-Test-\(UUID().uuidString)"
         var receivedData: String?
         
-        // Start a listener
         let listener: NWListener
         do {
-            listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: testPort)!)
+            let params = NWParameters.tcp
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: testPort)!)
+            listener = try NWListener(using: params)
         } catch {
             return (false, "Cannot create TCP listener: \(error.localizedDescription)")
         }
@@ -68,7 +68,6 @@ extension TidalDriftTestRunner {
             conn.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, _, _ in
                 if let data = data, let str = String(data: data, encoding: .utf8) {
                     receivedData = str
-                    // Echo back
                     conn.send(content: data, completion: .contentProcessed { _ in
                         conn.cancel()
                     })
@@ -81,7 +80,6 @@ extension TidalDriftTestRunner {
         
         try? await Task.sleep(nanoseconds: 500_000_000)
         
-        // Connect and send
         let endpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: testPort)!)
         let conn = NWConnection(to: endpoint, using: .tcp)
         var echoReceived: String?
@@ -98,7 +96,6 @@ extension TidalDriftTestRunner {
         }
         conn.start(queue: queue)
         
-        // Wait for roundtrip
         for _ in 0..<20 {
             try? await Task.sleep(nanoseconds: 200_000_000)
             if echoReceived != nil { break }
@@ -120,7 +117,9 @@ extension TidalDriftTestRunner {
         
         let listener: NWListener
         do {
-            listener = try NWListener(using: .udp, on: NWEndpoint.Port(rawValue: testPort)!)
+            let params = NWParameters.udp
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: testPort)!)
+            listener = try NWListener(using: params)
         } catch {
             return (false, "Cannot create UDP listener: \(error.localizedDescription)")
         }
@@ -142,7 +141,6 @@ extension TidalDriftTestRunner {
         
         try? await Task.sleep(nanoseconds: 500_000_000)
         
-        // Send a UDP packet to ourselves
         let endpoint = NWEndpoint.hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: testPort)!)
         let conn = NWConnection(to: endpoint, using: .udp)
         conn.stateUpdateHandler = { state in
