@@ -10,6 +10,11 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
             
+            LocalCastSettingsView()
+                .tabItem {
+                    Label("LocalCast", systemImage: "bolt.fill")
+                }
+            
             NetworkSettingsView()
                 .tabItem {
                     Label("Network", systemImage: "network")
@@ -28,6 +33,11 @@ struct SettingsView: View {
             MaintenanceSettingsView()
                 .tabItem {
                     Label("Maintenance", systemImage: "wrench.and.screwdriver")
+                }
+            
+            TestSuiteView()
+                .tabItem {
+                    Label("Tests", systemImage: "testtube.2")
                 }
             
             AboutView()

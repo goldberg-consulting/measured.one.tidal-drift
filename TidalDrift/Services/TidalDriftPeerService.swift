@@ -136,31 +136,36 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         
         Self.log("📢 Starting Bonjour advertisement via dns-sd")
         
-        // Use dns-sd command line tool which reliably works
+        let currentIP = NetworkUtils.getLocalIPAddress() ?? localInfo.ipAddress
+        
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/dns-sd")
         
-        // Build TXT record string
         let txtParts = [
             "model=\(localInfo.modelName)",
+            "modelId=\(localInfo.modelIdentifier)",
+            "cpu=\(localInfo.processorInfo)",
+            "mem=\(localInfo.memoryGB)",
             "os=\(localInfo.macOSVersion)",
             "user=\(localInfo.userName)",
-            "version=\(localInfo.tidalDriftVersion)"
+            "uptime=\(Self.getUptimeHours())",
+            "version=\(localInfo.tidalDriftVersion)",
+            "screen=\(localInfo.screenSharingEnabled ? "1" : "0")",
+            "file=\(localInfo.fileSharingEnabled ? "1" : "0")",
+            "ip=\(currentIP)"
         ]
         
-        // dns-sd -R <name> <type> <domain> <port> [txt...]
         var args = ["-R", deviceName, serviceType, "local.", "5959"]
         args.append(contentsOf: txtParts)
         process.arguments = args
         
-        // Silence output
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         
         do {
             try process.run()
             dnssdProcess = process
-            Self.log("✅ dns-sd process started with PID \(process.processIdentifier)")
+            Self.log("✅ dns-sd advertising: \(deviceName) on \(serviceType) with \(txtParts.count) TXT fields")
             DispatchQueue.main.async {
                 self.isAdvertising = true
             }
@@ -397,11 +402,8 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     private let txtRecordsLock = NSLock()
     
     private func parseResolveOutput(_ output: String, name: String) {
-        // Parse dns-sd -L output to get host, port, and TXT record
-        
         let lines = output.components(separatedBy: "\n")
         for line in lines {
-            // Parse TXT record entries (format: key=value)
             if line.contains("=") && !line.contains("can be reached at") {
                 let parts = line.trimmingCharacters(in: .whitespaces).components(separatedBy: " ")
                 for part in parts {
@@ -409,11 +411,9 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                         let kv = part.components(separatedBy: "=")
                         if kv.count == 2 {
                             let key = kv[0]
-                            // Clean up value: remove trailing backslashes, escape chars, and trim
                             var value = kv[1]
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                                 .replacingOccurrences(of: "\\", with: "")
-                            // Remove quotes if wrapped
                             if value.hasPrefix("\"") && value.hasSuffix("\"") {
                                 value = String(value.dropFirst().dropLast())
                             }
@@ -430,21 +430,29 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             }
             
             if line.contains("can be reached at") {
-                // Format: "ServiceName._tidaldrift._tcp.local. can be reached at hostname.local.:port"
                 if let hostRange = line.range(of: "at "), let portRange = line.range(of: ":5959") ?? line.range(of: ":\\d+", options: .regularExpression) {
                     let hostStart = hostRange.upperBound
                     let hostEnd = portRange.lowerBound
                     let hostname = String(line[hostStart..<hostEnd])
                     
                     Self.log("Resolved \(name) -> host: \(hostname)")
+                    
+                    // If TXT record already contains an IP, skip the slow dns-sd -G lookup
                     txtRecordsLock.lock()
-                    if let txt = resolvedTXTRecords[name] {
-                        Self.log("  TXT: \(txt)")
-                    }
+                    let txtIP = resolvedTXTRecords[name]?["ip"]
+                    let txt = resolvedTXTRecords[name]
                     txtRecordsLock.unlock()
                     
-                    // For now, try to get IP via hostname lookup
-                    lookupIP(for: name, hostname: hostname)
+                    if let txt = txt {
+                        Self.log("  TXT: \(txt)")
+                    }
+                    
+                    if let ip = txtIP, !ip.isEmpty, ip != "Unknown" {
+                        Self.log("✅ Using IP from TXT record: \(ip)")
+                        addDiscoveredPeer(name: name, ip: ip)
+                    } else {
+                        lookupIP(for: name, hostname: hostname)
+                    }
                 }
             }
         }

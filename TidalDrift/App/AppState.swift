@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import ApplicationServices
 
 class AppState: ObservableObject {
     static let shared = AppState()
@@ -18,8 +19,12 @@ class AppState: ObservableObject {
     @Published var screenSharingEnabled: Bool = false
     @Published var fileSharingEnabled: Bool = false
     @Published var remoteLoginEnabled: Bool = false
+    @Published var accessibilityGranted: Bool = false
     @Published var localIPAddress: String = "Unknown"
     @Published var computerName: String = NetworkUtils.computerName
+    
+    // TidalDrop listening status
+    @Published var tidalDropListening: Bool = false
     
     private var cancellables = Set<AnyCancellable>()
     
@@ -29,6 +34,24 @@ class AppState: ObservableObject {
         
         setupBindings()
         refreshLocalInfo()
+        
+        // Defer TidalDrop initialization to next run loop cycle
+        // to avoid circular dependency deadlock during AppState.shared init
+        DispatchQueue.main.async {
+            self.initializeTidalDrop()
+        }
+    }
+    
+    private func initializeTidalDrop() {
+        // Access the singleton to trigger init() which starts the listener
+        let dropService = TidalDropService.shared
+        
+        // Observe listening status
+        dropService.$isListening
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$tidalDropListening)
+        
+        print("🌊 TidalDrop: Service initialized, isListening: \(dropService.isListening)")
     }
     
     private func setupBindings() {
@@ -61,6 +84,7 @@ class AppState: ObservableObject {
         screenSharingEnabled = await SharingConfigurationService.shared.isScreenSharingEnabled()
         fileSharingEnabled = await SharingConfigurationService.shared.isFileSharingEnabled()
         remoteLoginEnabled = await SharingConfigurationService.shared.isRemoteLoginEnabled()
+        accessibilityGranted = AXIsProcessTrusted()
     }
     
     func toggleDeviceTrust(_ deviceId: UUID) {

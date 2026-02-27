@@ -69,6 +69,7 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
         case ssh = "_ssh._tcp."
         case tidalDrift = "_tidaldrift._tcp."
         case tidalDrop = "_tidaldrop._tcp."
+        case localCast = "_tidaldrift-cast._udp."
         
         var displayName: String {
             switch self {
@@ -78,6 +79,7 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
             case .ssh: return "SSH"
             case .tidalDrift: return "TidalDrift"
             case .tidalDrop: return "TidalDrop"
+            case .localCast: return "LocalCast"
             }
         }
         
@@ -89,6 +91,7 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
             case .ssh: return "terminal"
             case .tidalDrift: return "wave.3.right"
             case .tidalDrop: return "arrow.down.doc"
+            case .localCast: return "bolt.fill"
             }
         }
     }

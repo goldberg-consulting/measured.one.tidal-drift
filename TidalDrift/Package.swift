@@ -13,18 +13,23 @@ let package = Package(
         .executableTarget(
             name: "TidalDrift",
             path: ".",
-            exclude: ["build-release.sh", ".env", "TidalDrift.entitlements", "Info.plist", "Package.swift", "build-app.sh", "Resources/AppIcon.iconset", "Scripts", "PressKit", "dist", "drop", "bump-version.sh"],
+            exclude: ["build-release.sh", ".env", ".env.example", "TidalDrift.entitlements", "Info.plist", "Package.swift", "build-app.sh", "Resources/AppIcon.iconset", "Scripts", "PressKit", "dist", "drop", "bump-version.sh", "LocalCast/README.md"],
             sources: [
                 "App",
                 "Views",
                 "ViewModels", 
                 "Services",
                 "Models",
-                "Utilities"
+                "Utilities",
+                "LocalCast",
+                "Extensions"
             ],
             resources: [
                 .copy("Resources/AppIcon.icns"),
                 .process("Resources/Assets.xcassets")
+            ],
+            swiftSettings: [
+                .define("DEBUG", .when(configuration: .debug))
             ]
         )
     ]

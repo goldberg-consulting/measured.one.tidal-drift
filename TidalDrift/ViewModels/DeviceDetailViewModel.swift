@@ -98,6 +98,9 @@ class DeviceDetailViewModel: ObservableObject {
                 } else if device.services.contains(.afp) {
                     try await ScreenShareConnectionService.shared.connectToAFP(device: device, username: username.isEmpty ? nil : username)
                 }
+            case .localCast:
+                let viewer = try await LocalCastService.shared.connect(to: device)
+                await MainActor.run { viewer.showWindow(nil) }
             }
             
             saveCredentialsIfNeeded()
@@ -137,10 +140,8 @@ class DeviceDetailViewModel: ObservableObject {
             connectionTestResult = nil
         }
         
-        let result = await ScreenShareConnectionService.shared.testConnection(
-            to: device.ipAddress,
-            port: device.port
-        )
+        // Use smart resolution-based connection test (handles stale IPs)
+        let result = await ScreenShareConnectionService.shared.testConnectionToDevice(device)
         
         await MainActor.run {
             connectionTestResult = result

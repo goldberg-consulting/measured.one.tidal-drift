@@ -49,10 +49,18 @@ class DashboardViewModel: ObservableObject {
             }
         }
         
-        // Primary sort: TidalDrift peers first
-        // Secondary sort: based on user preference
+        // Sort priority:
+        // 1. THIS MAC (current device) always first
+        // 2. TidalDrift peers second
+        // 3. Other devices last
+        // Within each category, apply user's sort preference
         filtered.sort { device1, device2 in
-            // TidalDrift peers always come first
+            // THIS MAC (current device) always comes first
+            if device1.isCurrentDevice != device2.isCurrentDevice {
+                return device1.isCurrentDevice
+            }
+            
+            // TidalDrift peers come before non-peers
             if device1.isTidalDriftPeer != device2.isTidalDriftPeer {
                 return device1.isTidalDriftPeer
             }
@@ -102,6 +110,9 @@ class DashboardViewModel: ObservableObject {
                 } else if device.services.contains(.afp) {
                     try await ScreenShareConnectionService.shared.connectToAFP(device: device)
                 }
+            case .localCast:
+                let viewer = try await LocalCastService.shared.connect(to: device)
+                await MainActor.run { viewer.showWindow(nil) }
             }
             
             let record = ConnectionRecord(
@@ -126,6 +137,15 @@ class DashboardViewModel: ObservableObject {
     
     func refreshScan() {
         NetworkDiscoveryService.shared.refreshScan()
+    }
+    
+    /// Single-button discovery: Bonjour refresh + subnet scan combined
+    func discoverDevices() async {
+        NetworkDiscoveryService.shared.clearStaleDevices()
+        NetworkDiscoveryService.shared.refreshScan()
+        
+        let baseIP = NetworkUtils.getLocalIPAddress() ?? "192.168.1.1"
+        await NetworkDiscoveryService.shared.scanSubnet(baseIP: baseIP)
     }
     
     func addManualDevice(name: String, ipAddress: String) {

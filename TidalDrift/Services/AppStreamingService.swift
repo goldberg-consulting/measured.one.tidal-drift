@@ -205,48 +205,54 @@ class AppStreamingService: ObservableObject {
         runningApp.activate(options: [.activateIgnoringOtherApps])
     }
     
-    /// Attempts to start app-specific streaming using ScreenCaptureKit
-    /// This creates a stream that could be broadcast via custom protocol
+    /// Attempts to start app-specific streaming using LocalCast
+    /// This uses the existing LocalCast infrastructure for real streaming
+    @Published var isStreaming = false
+    @Published var streamingError: String?
+    
     func startCapture() async throws {
         guard let app = selectedApp else {
             throw StreamingError.noAppSelected
         }
         
-        // Get content again to ensure fresh data
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        print("🪟 AppStreaming: Starting stream for '\(app.name)'")
         
-        // Find the app in shareable content
-        guard content.applications.contains(where: { $0.processID == app.id }) else {
-            throw StreamingError.appNotFound
+        // Determine what to stream - window or app
+        if let window = selectedWindow {
+            // Stream specific window
+            print("🪟 AppStreaming: Streaming window '\(window.title)' (ID: \(window.id))")
+            try await LocalCastService.shared.startHostingWindow(
+                windowID: window.id,
+                windowTitle: window.title
+            )
+        } else {
+            // Stream entire app
+            print("🪟 AppStreaming: Streaming app '\(app.name)' (PID: \(app.id))")
+            try await LocalCastService.shared.startHostingApp(
+                processID: app.id,
+                appName: app.name
+            )
         }
         
-        // Create filter for just this app
-        contentFilter = SCContentFilter(desktopIndependentWindow: content.windows.first { 
-            $0.owningApplication?.processID == app.id 
-        }!)
-        
-        // Configure stream
-        let config = SCStreamConfiguration()
-        config.width = 1920
-        config.height = 1080
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 30) // 30 fps
-        config.queueDepth = 5
-        config.showsCursor = true
-        
-        streamConfiguration = config
-        
-        // Note: Actually starting the stream and broadcasting would require
-        // implementing a custom streaming protocol or using WebRTC
-        #if DEBUG
-        print("Would start streaming app: \(app.name)")
-        #endif
+        isStreaming = true
+        streamingError = nil
+        print("🪟 AppStreaming: ✅ Stream started successfully!")
     }
     
-    /// Stops the current capture
+    /// Stops the current capture/streaming
     func stopCapture() async {
-        try? await stream?.stopCapture()
+        print("🪟 AppStreaming: Stopping stream...")
+        
+        // Stop LocalCast hosting
+        await MainActor.run {
+            LocalCastService.shared.stopHosting()
+        }
+        
+        isStreaming = false
         stream = nil
         contentFilter = nil
+        
+        print("🪟 AppStreaming: Stream stopped")
     }
     
     /// Toggles experimental feature

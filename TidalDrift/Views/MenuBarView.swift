@@ -2,179 +2,473 @@ import SwiftUI
 
 struct MenuBarView: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject private var localCast = LocalCastService.shared
+    @ObservedObject private var discoveryService = NetworkDiscoveryService.shared
+    @ObservedObject private var clipboardService = ClipboardSyncService.shared
+    @State private var isTogglingLocalCast = false
+    @State private var showPermissionAlert = false
+    @State private var permissionAlertMessage = ""
     
-    // Filter out the current device - only show other devices
     private var otherDevices: [DiscoveredDevice] {
         appState.discoveredDevices.filter { !$0.isCurrentDevice }
     }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            statusSection
+            headerSection
             
-            Divider()
-                .padding(.vertical, 8)
+            Divider().padding(.vertical, 6)
+            
+            localCastSection
+            
+            Divider().padding(.vertical, 6)
             
             devicesSection
             
-            Divider()
-                .padding(.vertical, 8)
+            Divider().padding(.vertical, 6)
+            
+            quickSettingsSection
+            
+            Divider().padding(.vertical, 6)
             
             actionsSection
         }
         .padding(12)
-        .frame(width: 280)
+        .frame(width: 340)
     }
     
-    private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "rectangle.on.rectangle")
-                    .foregroundColor(appState.screenSharingEnabled ? .green : .secondary)
-                Text("Screen Sharing")
-                Spacer()
-                Text(appState.screenSharingEnabled ? "On" : "Off")
+    // MARK: - Header
+    
+    private var headerSection: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "desktopcomputer")
+                .font(.title3)
+                .foregroundColor(.accentColor)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(appState.computerName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Text(appState.localIPAddress)
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.secondary)
-                    .font(.caption)
             }
             
-            HStack {
-                Image(systemName: "folder")
-                    .foregroundColor(appState.fileSharingEnabled ? .green : .secondary)
-                Text("File Sharing")
-                Spacer()
-                Text(appState.fileSharingEnabled ? "On" : "Off")
-                    .foregroundColor(.secondary)
-                    .font(.caption)
+            Spacer()
+            
+            HStack(spacing: 6) {
+                StatusDot(on: appState.screenSharingEnabled, label: "Screen")
+                StatusDot(on: appState.fileSharingEnabled, label: "File")
+                StatusDot(on: appState.tidalDropListening, label: "Drop")
             }
         }
     }
+    
+    // MARK: - LocalCast
+    
+    private var localCastSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "bolt.fill")
+                    .foregroundColor(localCast.isHosting ? .yellow : .secondary)
+                    .font(.system(size: 12))
+                Text("LocalCast Hosting")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                
+                if isTogglingLocalCast {
+                    ProgressView().scaleEffect(0.6).frame(width: 36)
+                } else {
+                    Toggle("", isOn: Binding(
+                        get: { localCast.isHosting },
+                        set: { newValue in
+                            isTogglingLocalCast = true
+                            Task {
+                                if newValue {
+                                    do {
+                                        try await localCast.startHosting()
+                                    } catch let error as LocalCastError {
+                                        await MainActor.run {
+                                            permissionAlertMessage = error.errorDescription ?? "Failed to start LocalCast"
+                                            showPermissionAlert = true
+                                        }
+                                    } catch {
+                                        await MainActor.run {
+                                            permissionAlertMessage = error.localizedDescription
+                                            showPermissionAlert = true
+                                        }
+                                    }
+                                } else {
+                                    localCast.stopHosting()
+                                }
+                                await MainActor.run { isTogglingLocalCast = false }
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .scaleEffect(0.65)
+                    .labelsHidden()
+                }
+            }
+            .alert("LocalCast Permission Required", isPresented: $showPermissionAlert) {
+                Button("Open Screen Recording Settings") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+                }
+                Button("Open Accessibility Settings") {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text(permissionAlertMessage + "\n\nGrant Screen Recording to stream, and Accessibility for remote input control.")
+            }
+            
+            if localCast.isHosting {
+                if !localCast.activeConnections.isEmpty {
+                    ForEach(localCast.activeConnections) { conn in
+                        HStack(spacing: 4) {
+                            Image(systemName: "display").font(.system(size: 10))
+                            Text(conn.clientName).font(.system(size: 10))
+                        }
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 20)
+                    }
+                } else {
+                    Text("Waiting for connections...")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .italic()
+                        .padding(.leading, 20)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Devices
     
     private var devicesSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Nearby Devices")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .padding(.bottom, 4)
+            HStack {
+                Text("Nearby Devices")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .textCase(.uppercase)
+                
+                Spacer()
+                
+                Text("\(otherDevices.count)")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+            }
+            .padding(.bottom, 2)
             
             if otherDevices.isEmpty {
-                Text("No devices found")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .padding(.vertical, 8)
+                HStack {
+                    Spacer()
+                    VStack(spacing: 4) {
+                        Image(systemName: "network.slash")
+                            .font(.title3)
+                            .foregroundColor(.secondary.opacity(0.5))
+                        Text("No devices found")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 12)
+                    Spacer()
+                }
             } else {
-                ForEach(otherDevices.prefix(5)) { device in
-                    MenuBarDeviceRow(device: device)
-                }
+                let rowHeight: CGFloat = 38
+                let listHeight = min(CGFloat(otherDevices.count) * rowHeight, 240)
                 
-                if otherDevices.count > 5 {
-                    Text("+ \(otherDevices.count - 5) more")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.top, 4)
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(spacing: 2) {
+                        ForEach(otherDevices) { device in
+                            MenuBarDeviceRow(device: device)
+                        }
+                    }
                 }
+                .frame(height: listHeight)
+                .clipped()
             }
         }
     }
     
+    // MARK: - Quick Settings
+    
+    private var quickSettingsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Quick Settings")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+                .padding(.bottom, 2)
+            
+            HStack {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .frame(width: 16)
+                    .font(.system(size: 10))
+                Text("Peer Discovery")
+                    .font(.system(size: 12))
+                Spacer()
+                Toggle("", isOn: $appState.settings.peerDiscoveryEnabled)
+                    .toggleStyle(.switch)
+                    .scaleEffect(0.6)
+                    .labelsHidden()
+            }
+            
+            HStack {
+                Image(systemName: "doc.on.clipboard")
+                    .frame(width: 16)
+                    .font(.system(size: 10))
+                Text("Clipboard Sync")
+                    .font(.system(size: 12))
+                Spacer()
+                Toggle("", isOn: $clipboardService.isEnabled)
+                    .toggleStyle(.switch)
+                    .scaleEffect(0.6)
+                    .labelsHidden()
+            }
+        }
+    }
+    
+    // MARK: - Actions
+    
     private var actionsSection: some View {
-        VStack(spacing: 4) {
-            Button {
-                NetworkDiscoveryService.shared.refreshScan()
-            } label: {
-                HStack {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Scan Network")
-                    Spacer()
+        VStack(spacing: 2) {
+            MenuBarActionButton(icon: "arrow.clockwise", label: discoveryService.isScanningSubnet ? "Scanning..." : "Discover Devices") {
+                Task {
+                    NetworkDiscoveryService.shared.refreshScan()
+                    let baseIP = NetworkUtils.getLocalIPAddress() ?? "192.168.1.1"
+                    await NetworkDiscoveryService.shared.scanSubnet(baseIP: baseIP)
                 }
             }
-            .buttonStyle(.plain)
+            .disabled(discoveryService.isScanningSubnet)
             
-            Button {
-                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "") {
-                    NSWorkspace.shared.openApplication(at: url, configuration: .init())
-                }
-            } label: {
-                HStack {
-                    Image(systemName: "macwindow")
-                    Text("Open TidalDrift")
-                    Spacer()
+            MenuBarActionButton(icon: "gearshape", label: "Settings...") {
+                NSApp.activate(ignoringOtherApps: true)
+                if #available(macOS 14.0, *) {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                } else {
+                    NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
                 }
             }
-            .buttonStyle(.plain)
             
-            Button {
-                appState.hasCompletedOnboarding = false
-            } label: {
-                HStack {
-                    Image(systemName: "arrow.counterclockwise")
-                    Text("Run Setup Wizard")
-                    Spacer()
+            MenuBarActionButton(icon: "arrow.counterclockwise", label: "Run Setup Wizard") {
+                if let delegate = NSApp.delegate as? AppDelegate {
+                    delegate.showOnboarding()
                 }
             }
-            .buttonStyle(.plain)
             
-            Divider()
-                .padding(.vertical, 4)
+            Divider().padding(.vertical, 2)
             
-            Button {
+            MenuBarActionButton(icon: "power", label: "Quit TidalDrift") {
                 NSApplication.shared.terminate(nil)
-            } label: {
-                HStack {
-                    Image(systemName: "power")
-                    Text("Quit")
-                    Spacer()
-                }
             }
-            .buttonStyle(.plain)
         }
     }
 }
 
-struct MenuBarDeviceRow: View {
-    let device: DiscoveredDevice
+// MARK: - Compact Status Dot
+
+struct StatusDot: View {
+    let on: Bool
+    let label: String
+    
+    var body: some View {
+        VStack(spacing: 2) {
+            Circle()
+                .fill(on ? Color.green : Color.secondary.opacity(0.3))
+                .frame(width: 6, height: 6)
+            Text(label)
+                .font(.system(size: 8))
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+// MARK: - Action Button
+
+struct MenuBarActionButton: View {
+    let icon: String
+    let label: String
+    let action: () -> Void
     @State private var isHovering = false
     
     var body: some View {
-        Button {
-            connectToDevice()
-        } label: {
-            HStack {
-                Image(systemName: device.deviceIcon)
-                    .font(.subheadline)
-                    .foregroundColor(.accentColor)
-                
-                Text(device.name)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .frame(width: 16)
+                    .font(.system(size: 11))
+                Text(label)
+                    .font(.system(size: 12))
                 Spacer()
-                
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
             .padding(.vertical, 4)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 6)
             .background(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: 4)
                     .fill(isHovering ? Color.accentColor.opacity(0.1) : Color.clear)
             )
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            isHovering = hovering
+        .onHover { isHovering = $0 }
+    }
+}
+
+// MARK: - Device Row
+
+struct MenuBarDeviceRow: View {
+    let device: DiscoveredDevice
+    @ObservedObject private var localCast = LocalCastService.shared
+    @State private var isHovering = false
+    @State private var showPINEntry = false
+    
+    private var showLocalCast: Bool {
+        device.services.contains(.localCast) || device.isTidalDriftPeer
+    }
+    private var showSSH: Bool {
+        device.services.contains(.ssh) || device.isTidalDriftPeer
+    }
+    
+    private var savedDevicePassword: String? {
+        guard let creds = try? KeychainService.shared.getCredential(for: device.stableId) else {
+            return nil
+        }
+        return creds.password.isEmpty ? nil : creds.password
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: device.deviceIcon)
+                    .font(.system(size: 11))
+                    .foregroundColor(.accentColor)
+                    .frame(width: 16)
+                
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(device.name)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                    Text(device.ipAddress)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // Inline quick-action buttons (visible on hover)
+                if isHovering {
+                    HStack(spacing: 4) {
+                        if showLocalCast {
+                            QuickActionIcon(icon: "bolt.fill", color: .yellow, tooltip: "LocalCast") {
+                                startLocalCast()
+                            }
+                        }
+                        
+                        QuickActionIcon(icon: "display", color: .blue, tooltip: "Screen Share") {
+                            Task { try? await ScreenShareConnectionService.shared.connect(to: device) }
+                        }
+                        
+                        QuickActionIcon(icon: "folder", color: .orange, tooltip: "File Share") {
+                            Task { try? await ScreenShareConnectionService.shared.connectToFileShare(device: device) }
+                        }
+                        
+                        if showSSH {
+                            QuickActionIcon(icon: "terminal", color: .green, tooltip: "SSH") {
+                                ScreenShareConnectionService.shared.connectToSSH(device: device)
+                            }
+                        }
+                        
+                        QuickActionIcon(icon: "info.circle", color: .secondary, tooltip: "Details") {
+                            DeviceDetailWindowManager.shared.showDetail(for: device)
+                        }
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                } else {
+                    // Status indicators when not hovering
+                    HStack(spacing: 3) {
+                        if device.isTidalDriftPeer {
+                            Image(systemName: "wave.3.right")
+                                .font(.system(size: 8))
+                                .foregroundColor(.blue)
+                        }
+                        Circle()
+                            .fill(device.isOnline ? Color.green : Color.secondary.opacity(0.3))
+                            .frame(width: 6, height: 6)
+                    }
+                }
+            }
+            .padding(.vertical, 5)
+            .padding(.horizontal, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(isHovering ? Color.accentColor.opacity(0.08) : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.15)) { isHovering = hovering }
+            }
+        }
+        .sheet(isPresented: $showPINEntry) {
+            LocalCastPINEntryView(
+                deviceName: device.name,
+                savedPassword: savedDevicePassword,
+                onConnect: { password in
+                    showPINEntry = false
+                    connectLocalCast(password: password)
+                },
+                onCancel: { showPINEntry = false }
+            )
         }
     }
     
-    private func connectToDevice() {
+    private func startLocalCast() {
+        if let password = savedDevicePassword {
+            connectLocalCast(password: password)
+        } else {
+            showPINEntry = true
+        }
+    }
+    
+    private func connectLocalCast(password: String?) {
         Task {
-            if device.services.contains(.screenSharing) {
-                try? await ScreenShareConnectionService.shared.connect(to: device)
-            } else if device.services.contains(.fileSharing) {
-                try? await ScreenShareConnectionService.shared.connectToFileShare(device: device)
+            do {
+                let viewer = try await LocalCastService.shared.connect(to: device, password: password)
+                await MainActor.run { viewer.showWindow(nil) }
+            } catch {
+                print("MenuBar LocalCast failed: \(error)")
+                Task { try? await ScreenShareConnectionService.shared.connect(to: device) }
             }
         }
+    }
+}
+
+// MARK: - Quick Action Icon Button
+
+struct QuickActionIcon: View {
+    let icon: String
+    let color: Color
+    let tooltip: String
+    let action: () -> Void
+    @State private var isHovering = false
+    
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundColor(isHovering ? .white : color)
+                .frame(width: 20, height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isHovering ? color : color.opacity(0.15))
+                )
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+        .onHover { isHovering = $0 }
     }
 }
 

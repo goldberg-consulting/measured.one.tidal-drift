@@ -30,3 +30,12 @@ xcuserdata/
 *.tmp
 *.temp
 
+# Environment secrets
+.env
+!.env.example
+
+# Build output from build-app.sh
+build-xcode/
+dist/
+drop/
+

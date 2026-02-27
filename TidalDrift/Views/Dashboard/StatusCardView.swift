@@ -1,79 +1,179 @@
 import SwiftUI
+import OSLog
+import ApplicationServices
 
 struct StatusCardView: View {
     @EnvironmentObject var appState: AppState
-    @State private var isTogglingScreen: Bool = false
-    @State private var isTogglingFile: Bool = false
-    @State private var isTogglingSSH: Bool = false
-    
+    @ObservedObject private var localCast = LocalCastService.shared
+    @ObservedObject private var clipboard = ClipboardSyncService.shared
+    private let logger = Logger(subsystem: "com.tidaldrift", category: "StatusCard")
+
+    @State private var isTogglingScreen = false
+    @State private var isTogglingFile = false
+    @State private var isTogglingSSH = false
+    @State private var isTogglingLocalCast = false
+    @State private var showPermissionAlert = false
+    @State private var permissionAlertMessage = ""
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "desktopcomputer")
-                    .font(.title2)
-                    .foregroundColor(.accentColor)
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(appState.computerName)
-                        .font(.headline)
-                    Text("This Mac")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+            header
+            Divider()
+            toggleSection
+            Divider()
+            infoSection
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .alert("Permission Required", isPresented: $showPermissionAlert) {
+            Button("Open Screen Recording Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                    NSWorkspace.shared.open(url)
                 }
             }
-            
-            Divider()
-            
-            VStack(spacing: 8) {
-                SharingToggleRow(
-                    label: "Screen Sharing",
-                    isEnabled: appState.screenSharingEnabled,
-                    isToggling: isTogglingScreen
-                ) {
-                    toggleScreenSharing()
-                }
-                
-                SharingToggleRow(
-                    label: "File Sharing",
-                    isEnabled: appState.fileSharingEnabled,
-                    isToggling: isTogglingFile
-                ) {
-                    toggleFileSharing()
-                }
-                
-                HStack {
-                    Text("Peer Discovery")
-                        .font(.caption)
-                    Spacer()
-                    Toggle("", isOn: $appState.settings.peerDiscoveryEnabled)
-                        .toggleStyle(.switch)
-                        .scaleEffect(0.7)
-                        .frame(width: 40)
-                }
-                
-                SharingToggleRow(
-                    label: "Remote Login (SSH)",
-                    isEnabled: appState.remoteLoginEnabled,
-                    isToggling: isTogglingSSH
-                ) {
-                    toggleRemoteLogin()
-                }
-            }
-            
-            Divider()
-            
-            HStack {
-                Text("IP Address")
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(permissionAlertMessage)
+        }
+        .onAppear {
+            appState.refreshLocalInfo()
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Image(systemName: "desktopcomputer")
+                .font(.title2)
+                .foregroundColor(.accentColor)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(appState.computerName)
+                    .font(.headline)
+                Text("This Mac")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                
+            }
+        }
+    }
+
+    private var toggleSection: some View {
+        VStack(spacing: 8) {
+            SharingToggleRow(label: "Screen Sharing", isEnabled: appState.screenSharingEnabled, isToggling: isTogglingScreen) {
+                toggleScreenSharing()
+            }
+
+            SharingToggleRow(label: "File Sharing", isEnabled: appState.fileSharingEnabled, isToggling: isTogglingFile) {
+                toggleFileSharing()
+            }
+
+            SharingToggleRow(label: "Remote Login (SSH)", isEnabled: appState.remoteLoginEnabled, isToggling: isTogglingSSH) {
+                toggleRemoteLogin()
+            }
+
+            HStack {
+                Text("Peer Discovery")
+                    .font(.caption)
                 Spacer()
-                
+                Toggle("", isOn: $appState.settings.peerDiscoveryEnabled)
+                    .toggleStyle(.switch)
+                    .scaleEffect(0.7)
+                    .frame(width: 40)
+            }
+
+            Divider()
+                .padding(.vertical, 2)
+
+            HStack {
+                Text("Clipboard Sync")
+                    .font(.caption)
+                Spacer()
+                Toggle("", isOn: $clipboard.isEnabled)
+                    .toggleStyle(.switch)
+                    .scaleEffect(0.7)
+                    .frame(width: 40)
+            }
+
+            HStack {
+                Text("Screen Streaming")
+                    .font(.caption)
+                Spacer()
+
+                if isTogglingLocalCast {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 40)
+                } else {
+                    Toggle("", isOn: Binding(
+                        get: { localCast.isHosting },
+                        set: { newValue in
+                            isTogglingLocalCast = true
+                            Task {
+                                defer { Task { @MainActor in isTogglingLocalCast = false } }
+                                if newValue {
+                                    do {
+                                        try await localCast.startHosting()
+                                    } catch {
+                                        await MainActor.run {
+                                            permissionAlertMessage = error.localizedDescription
+                                            showPermissionAlert = true
+                                        }
+                                    }
+                                } else {
+                                    localCast.stopHosting()
+                                }
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .scaleEffect(0.7)
+                    .frame(width: 40)
+                }
+            }
+            
+            // Show encrypted badge when auth is active
+            if localCast.isHosting && localCast.isAuthEnabled {
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.fill")
+                        .font(.caption2)
+                        .foregroundColor(.green)
+                    Text("Encrypted")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            }
+            
+            // Accessibility permission (required for remote input control)
+            HStack {
+                Text("Input Control")
+                    .font(.caption)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { appState.accessibilityGranted },
+                    set: { _ in toggleAccessibility() }
+                ))
+                .toggleStyle(.switch)
+                .scaleEffect(0.7)
+                .frame(width: 40)
+            }
+        }
+    }
+
+    private var infoSection: some View {
+        VStack(spacing: 6) {
+            HStack {
                 Text(appState.localIPAddress)
                     .font(.system(.caption, design: .monospaced))
-                
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
                 Button {
-                    copyIPAddress()
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(appState.localIPAddress, forType: .string)
                 } label: {
                     Image(systemName: "doc.on.doc")
                         .font(.caption2)
@@ -81,108 +181,93 @@ struct StatusCardView: View {
                 .buttonStyle(.plain)
                 .foregroundColor(.accentColor)
             }
-            
-            // TidalDrift peer count
+
             let peerCount = appState.discoveredDevices.filter { $0.isTidalDriftPeer }.count
-            if peerCount > 0 {
-                HStack {
-                    Image(systemName: "wave.3.right")
-                        .font(.caption)
-                        .foregroundColor(.blue)
-                    
-                    Text("\(peerCount) TidalDrift peer\(peerCount == 1 ? "" : "s")")
-                        .font(.caption)
-                        .foregroundColor(.blue)
-                    
-                    Spacer()
-                    
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 6, height: 6)
-                }
-            }
-            
-            Divider()
-            
             HStack {
-                Text("Version")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                if peerCount > 0 {
+                    Text("\(peerCount) peer\(peerCount == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
                 Spacer()
-                Text(Bundle.main.appVersion)
+                Text("v\(Bundle.main.appVersion)")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
-        .onAppear {
-            appState.refreshLocalInfo()
         }
     }
-    
-    private func copyIPAddress() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(appState.localIPAddress, forType: .string)
+
+    private func toggleAccessibility() {
+        if appState.accessibilityGranted {
+            // Already granted — open System Settings so user can manually remove it
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        } else {
+            // Not granted or stale from a previous build.
+            // Reset the TCC entry to clear sticky permissions from old binaries,
+            // then re-prompt. This forces macOS to forget the old association.
+            Task.detached {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+                process.arguments = ["reset", "Accessibility", "com.goldbergconsulting.tidaldrift"]
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                try? process.run()
+                process.waitUntilExit()
+                
+                // Now prompt — this opens the System Settings dialog
+                await MainActor.run {
+                    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                    AXIsProcessTrustedWithOptions(options)
+                }
+                
+                // Poll for a few seconds to detect when the user grants it
+                for _ in 0..<15 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    let granted = AXIsProcessTrusted()
+                    await MainActor.run {
+                        self.appState.accessibilityGranted = granted
+                    }
+                    if granted { break }
+                }
+            }
+        }
     }
     
     private func toggleScreenSharing() {
         isTogglingScreen = true
-        let newState = !appState.screenSharingEnabled
-        
         Task {
-            let success = await SharingConfigurationService.shared.toggleScreenSharing(enable: newState)
+            let success = await SharingConfigurationService.shared.toggleScreenSharing(enable: !appState.screenSharingEnabled)
             await MainActor.run {
                 isTogglingScreen = false
-                if success {
-                    appState.screenSharingEnabled = newState
-                }
-                // Refresh to get actual state
-                Task {
-                    await appState.checkSharingStatus()
-                }
+                if success { appState.screenSharingEnabled.toggle() }
             }
+            await appState.checkSharingStatus()
         }
     }
-    
+
     private func toggleFileSharing() {
         isTogglingFile = true
-        let newState = !appState.fileSharingEnabled
-        
         Task {
-            let success = await SharingConfigurationService.shared.toggleFileSharing(enable: newState)
+            let success = await SharingConfigurationService.shared.toggleFileSharing(enable: !appState.fileSharingEnabled)
             await MainActor.run {
                 isTogglingFile = false
-                if success {
-                    appState.fileSharingEnabled = newState
-                }
-                // Refresh to get actual state
-                Task {
-                    await appState.checkSharingStatus()
-                }
+                if success { appState.fileSharingEnabled.toggle() }
             }
+            await appState.checkSharingStatus()
         }
     }
-    
+
     private func toggleRemoteLogin() {
         isTogglingSSH = true
-        let newState = !appState.remoteLoginEnabled
-        
         Task {
-            let success = await SharingConfigurationService.shared.toggleRemoteLogin(enable: newState)
+            let success = await SharingConfigurationService.shared.toggleRemoteLogin(enable: !appState.remoteLoginEnabled)
             await MainActor.run {
                 isTogglingSSH = false
-                if success {
-                    appState.remoteLoginEnabled = newState
-                }
-                // Refresh to get actual state
-                Task {
-                    await appState.checkSharingStatus()
-                }
+                if success { appState.remoteLoginEnabled.toggle() }
             }
+            await appState.checkSharingStatus()
         }
     }
 }
@@ -192,14 +277,12 @@ struct SharingToggleRow: View {
     let isEnabled: Bool
     let isToggling: Bool
     let onToggle: () -> Void
-    
+
     var body: some View {
         HStack {
             Text(label)
                 .font(.caption)
-            
             Spacer()
-            
             if isToggling {
                 ProgressView()
                     .scaleEffect(0.6)
@@ -214,92 +297,5 @@ struct SharingToggleRow: View {
                 .frame(width: 40)
             }
         }
-    }
-}
-
-struct StatusRow: View {
-    let label: String
-    let isEnabled: Bool
-    
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.caption)
-            
-            Spacer()
-            
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(isEnabled ? Color.green : Color.orange)
-                    .frame(width: 6, height: 6)
-                
-                Text(isEnabled ? "On" : "Off")
-                    .font(.caption)
-                    .foregroundColor(isEnabled ? .green : .orange)
-            }
-        }
-    }
-}
-
-struct QRCodeSheet: View {
-    let ipAddress: String
-    @Environment(\.dismiss) var dismiss
-    
-    var body: some View {
-        VStack(spacing: 20) {
-            Text("Connect to This Mac")
-                .font(.headline)
-            
-            if let qrImage = generateQRCode(from: "vnc://\(ipAddress)") {
-                Image(nsImage: qrImage)
-                    .interpolation(.none)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 200, height: 200)
-            }
-            
-            Text("vnc://\(ipAddress)")
-                .font(.system(.body, design: .monospaced))
-                .foregroundColor(.secondary)
-            
-            Button("Done") {
-                dismiss()
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .padding(40)
-        .frame(width: 300, height: 350)
-    }
-    
-    private func generateQRCode(from string: String) -> NSImage? {
-        guard let data = string.data(using: .utf8),
-              let filter = CIFilter(name: "CIQRCodeGenerator") else {
-            return nil
-        }
-        
-        filter.setValue(data, forKey: "inputMessage")
-        filter.setValue("M", forKey: "inputCorrectionLevel")
-        
-        guard let ciImage = filter.outputImage else {
-            return nil
-        }
-        
-        let transform = CGAffineTransform(scaleX: 10, y: 10)
-        let scaledImage = ciImage.transformed(by: transform)
-        
-        let rep = NSCIImageRep(ciImage: scaledImage)
-        let nsImage = NSImage(size: rep.size)
-        nsImage.addRepresentation(rep)
-        
-        return nsImage
-    }
-}
-
-struct StatusCardView_Previews: PreviewProvider {
-    static var previews: some View {
-        StatusCardView()
-            .environmentObject(AppState.shared)
-            .frame(width: 250)
-            .padding()
     }
 }

@@ -7,6 +7,7 @@ struct DeviceCardView: View {
     
     @State private var isPressed = false
     @State private var isTargetedForDrop = false
+    @State private var showPINEntry = false
     
     @ObservedObject private var dropService = TidalDropService.shared
     
@@ -40,6 +41,19 @@ struct DeviceCardView: View {
         .onTapGesture { handleTap() }
         .onDrop(of: [.fileURL], isTargeted: $isTargetedForDrop) { providers in
             handleDrop(providers: providers)
+        }
+        .sheet(isPresented: $showPINEntry) {
+            LocalCastPINEntryView(
+                deviceName: device.name,
+                savedPassword: savedDevicePassword,
+                onConnect: { password in
+                    showPINEntry = false
+                    connectLocalCast(password: password)
+                },
+                onCancel: {
+                    showPINEntry = false
+                }
+            )
         }
     }
     
@@ -81,89 +95,116 @@ struct DeviceCardView: View {
         }
     }
     
+    /// Look up saved password for this device from Keychain.
+    private var savedDevicePassword: String? {
+        guard let creds = try? KeychainService.shared.getCredential(for: device.stableId) else {
+            return nil
+        }
+        return creds.password.isEmpty ? nil : creds.password
+    }
+    
+    private func startLocalCast() {
+        // If saved credentials exist, auto-connect without showing the sheet
+        if let password = savedDevicePassword {
+            connectLocalCast(password: password)
+        } else {
+            showPINEntry = true
+        }
+    }
+    
+    private func connectLocalCast(password: String?) {
+        Task {
+            do {
+                let viewer = try await LocalCastService.shared.connect(to: device, password: password)
+                await MainActor.run {
+                    viewer.showWindow(nil)
+                }
+            } catch {
+                print("❌ LocalCast: Connection failed, falling back to VNC: \(error.localizedDescription)")
+                onTap() // Fallback to standard VNC
+            }
+        }
+    }
+    
+    /// System Screen Share + App Control: opens macOS Screen Sharing.app
+    /// for the video and a floating TidalDrift panel for app-level control.
+    private func startSystemScreenShare() {
+        Task {
+            do {
+                let panel = try await LocalCastService.shared.connectSystemScreenShare(to: device)
+                await MainActor.run {
+                    panel.showWindow(nil)
+                }
+            } catch {
+                print("❌ System Screen Share: \(error.localizedDescription)")
+                // Fallback to plain VNC
+                onTap()
+            }
+        }
+    }
+    
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { 
-            print("🌊 TidalDrop: No provider in drop")
-            return false 
-        }
+        let targetDevice = device
         
-        // Check if device has valid IP
-        guard !device.ipAddress.isEmpty, device.ipAddress != "Unknown" else {
-            print("🌊 TidalDrop: Invalid IP address: \(device.ipAddress)")
-            return false
-        }
-        
-        print("🌊 TidalDrop: Processing drop to \(device.name) at \(device.ipAddress)")
-        
-        // Use loadItem for file URLs (more reliable than loadObject)
-        provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, error in
-            if let error = error {
-                print("🌊 TidalDrop: Load error: \(error)")
-                return
-            }
-            
-            var fileURL: URL?
-            
-            // Handle different item types
-            if let url = item as? URL {
-                fileURL = url
-            } else if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
-                fileURL = url
-            }
-            
-            if let url = fileURL {
-                // Check if it's a directory
+        for provider in providers {
+            provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { (item, error) in
+                if let error = error {
+                    print("TidalDrop: Drop load error: \(error.localizedDescription)")
+                    return
+                }
+                
+                let url: URL? = item as? URL ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+                guard let fileURL = url else { return }
+                
+                let didStartAccess = fileURL.startAccessingSecurityScopedResource()
+                defer { if didStartAccess { fileURL.stopAccessingSecurityScopedResource() } }
+                
                 var isDirectory: ObjCBool = false
-                FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+                guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else { return }
                 
                 if isDirectory.boolValue {
-                    print("🌊 TidalDrop: Folder detected: \(url.lastPathComponent)")
-                    // For folders, send each file individually
-                    self.sendFolder(at: url)
+                    self.sendFolderContents(at: fileURL, to: targetDevice)
                 } else {
-                    print("🌊 TidalDrop: Sending \(url.lastPathComponent) to \(self.device.name)")
-                    DispatchQueue.main.async {
-                        // Use smart send - tries mounted shares first, falls back to peer-to-peer
-                        TidalDropService.shared.smartSendFile(at: url, to: self.device)
-                    }
+                    self.readAndSendFile(at: fileURL, to: targetDevice)
                 }
-            } else {
-                print("🌊 TidalDrop: Could not extract URL from dropped item")
             }
         }
         return true
     }
     
-    private func sendFolder(at folderURL: URL) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            // Get all files in the folder (non-recursive for now)
-            let fileManager = FileManager.default
-            guard let contents = try? fileManager.contentsOfDirectory(
-                at: folderURL,
-                includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles]
-            ) else {
-                print("🌊 TidalDrop: Could not read folder contents")
-                return
-            }
-            
-            let files = contents.filter { url in
-                var isDir: ObjCBool = false
-                fileManager.fileExists(atPath: url.path, isDirectory: &isDir)
-                return !isDir.boolValue
-            }
-            
-            print("🌊 TidalDrop: Sending \(files.count) files from folder \(folderURL.lastPathComponent)")
-            
-            for file in files {
-                DispatchQueue.main.async {
-                    TidalDropService.shared.smartSendFile(at: file, to: self.device)
-                }
-                // Small delay between files to avoid overwhelming the receiver
-                Thread.sleep(forTimeInterval: 0.5)
-            }
+    /// Read file data while security-scoped access is still active, then send.
+    private func readAndSendFile(at fileURL: URL, to device: DiscoveredDevice) {
+        guard let fileData = try? Data(contentsOf: fileURL) else {
+            print("TidalDrop: Cannot read file \(fileURL.lastPathComponent)")
+            return
+        }
+        let fileName = fileURL.lastPathComponent
+        DispatchQueue.main.async {
+            TidalDropService.shared.smartSendFileData(
+                fileName: fileName, fileData: fileData, to: device
+            )
         }
     }
+    
+    /// Read all files in a folder while security-scoped access is active, then send each.
+    private func sendFolderContents(at folderURL: URL, to device: DiscoveredDevice) {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        
+        let files = contents.filter { url in
+            var isDir: ObjCBool = false
+            FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+            return !isDir.boolValue
+        }
+        
+        for file in files {
+            readAndSendFile(at: file, to: device)
+        }
+    }
+    
     
     private var deviceIconSection: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -397,18 +438,52 @@ struct DeviceCardView: View {
     
     private var actionButtonsSection: some View {
         VStack(spacing: 6) {
-            Button(action: { onTap() }) {
+            if device.supportsLocalCast {
+                // Two-button row for LocalCast-capable devices
                 HStack(spacing: 4) {
-                    Image(systemName: device.isTidalDriftPeer ? "macwindow.on.rectangle" : "link")
-                    Text(device.isTidalDriftPeer ? "SCREEN SHARE" : "CONNECT")
+                    Button(action: { startLocalCast() }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "bolt.fill")
+                            Text("LOCALCAST")
+                        }
+                        .font(.system(size: 9, weight: .bold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.yellow))
+                        .foregroundColor(.black)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Low-latency LocalCast streaming")
+                    
+                    Button(action: { startSystemScreenShare() }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "play.display")
+                            Text("SYS")
+                        }
+                        .font(.system(size: 9, weight: .bold))
+                        .frame(width: 52)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.tidalDriftPeer))
+                        .foregroundColor(.white)
+                    }
+                    .buttonStyle(.plain)
+                    .help("System Screen Share + App Control: Apple's VNC with TidalDrift app picker")
                 }
-                .font(.system(size: 9, weight: .bold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(Capsule().fill(device.isTidalDriftPeer ? Color.tidalDriftPeer : Color.accentColor))
-                .foregroundColor(.white)
+            } else {
+                Button(action: { onTap() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: device.isTidalDriftPeer ? "macwindow.on.rectangle" : "link")
+                        Text(device.isTidalDriftPeer ? "SCREEN SHARE" : "CONNECT")
+                    }
+                    .font(.system(size: 9, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(device.isTidalDriftPeer ? Color.tidalDriftPeer : Color.accentColor))
+                    .foregroundColor(.white)
+                }
+                .buttonStyle(.plain)
+                .help("Standard screen sharing")
             }
-            .buttonStyle(.plain)
             
             HStack(spacing: 6) {
                 if device.isTidalDriftPeer || device.services.contains(.ssh) {

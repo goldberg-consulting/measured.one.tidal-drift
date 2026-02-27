@@ -47,8 +47,21 @@ class TidalDropService: ObservableObject {
     private let connectionsLock = NSLock()
     
     private init() {
+        ensureDestinationFolderExists()
         startListening()
         requestNotificationPermission()
+    }
+    
+    private func ensureDestinationFolderExists() {
+        let folder = AppState.shared.settings.tidalDropFolder
+        if !FileManager.default.fileExists(atPath: folder.path) {
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                print("✅ TidalDrop: Created default destination folder at \(folder.path)")
+            } catch {
+                print("❌ TidalDrop: Failed to create initial destination folder: \(error.localizedDescription)")
+            }
+        }
     }
     
     // MARK: - Smart Drop (tries mounted drives first)
@@ -59,13 +72,39 @@ class TidalDropService: ObservableObject {
     func smartSendFile(at url: URL, to device: DiscoveredDevice) {
         print("🌊 TidalDrop: Smart send - checking for mounted shares for \(device.name)")
         
-        // Check for mounted volumes that might be from this device
         if let mountedPath = findMountedShare(for: device) {
             print("🌊 TidalDrop: Found mounted share: \(mountedPath)")
             copyToMountedShare(file: url, destination: mountedPath, device: device)
         } else {
             print("🌊 TidalDrop: No mounted share, using peer-to-peer")
             sendFile(at: url, to: device.ipAddress)
+        }
+    }
+    
+    /// Sends pre-read file data. Use this when the caller has already read the
+    /// file (e.g. while security-scoped access was still active from a drag & drop).
+    func smartSendFileData(fileName: String, fileData: Data, to device: DiscoveredDevice) {
+        print("🌊 TidalDrop: Smart send (data) '\(fileName)' (\(fileData.count) bytes) to \(device.name)")
+        
+        if let mountedPath = findMountedShare(for: device) {
+            let destination = resolveDropDestination(within: mountedPath)
+            let destinationFile = destination.appendingPathComponent(fileName)
+            
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    if FileManager.default.fileExists(atPath: destinationFile.path) {
+                        try FileManager.default.removeItem(at: destinationFile)
+                    }
+                    try fileData.write(to: destinationFile)
+                    print("✅ TidalDrop: Wrote '\(fileName)' to mounted share")
+                    self.notifyCompletion(fileName: fileName, isIncoming: false, viaMountedShare: true)
+                } catch {
+                    print("TidalDrop: Mounted share write failed, using peer-to-peer: \(error)")
+                    self.sendFileWithData(fileName: fileName, fileData: fileData, to: device.ipAddress)
+                }
+            }
+        } else {
+            sendFileWithData(fileName: fileName, fileData: fileData, to: device.ipAddress)
         }
     }
     
@@ -104,6 +143,37 @@ class TidalDropService: ObservableObject {
         return nil
     }
     
+    /// Resolves the best subfolder within a mounted share for TidalDrop files.
+    /// Prefers `Public/Drop Box` (matches macOS convention and the peer-to-peer
+    /// receiver path), falling back to `Public/`, then the share root.
+    private func resolveDropDestination(within shareRoot: URL) -> URL {
+        let fm = FileManager.default
+        
+        // Best: Public/Drop Box (standard macOS incoming files folder)
+        let dropBox = shareRoot.appendingPathComponent("Public").appendingPathComponent("Drop Box")
+        if fm.fileExists(atPath: dropBox.path) {
+            print("🌊 TidalDrop: Using Public/Drop Box within mounted share")
+            return dropBox
+        }
+        
+        // Try to create it if Public exists
+        let publicDir = shareRoot.appendingPathComponent("Public")
+        if fm.fileExists(atPath: publicDir.path) {
+            do {
+                try fm.createDirectory(at: dropBox, withIntermediateDirectories: true)
+                print("🌊 TidalDrop: Created Public/Drop Box within mounted share")
+                return dropBox
+            } catch {
+                print("🌊 TidalDrop: Could not create Drop Box, using Public/")
+                return publicDir
+            }
+        }
+        
+        // Fallback: share root (original behavior)
+        print("🌊 TidalDrop: No Public folder found, using share root")
+        return shareRoot
+    }
+    
     /// Copies a file to a mounted network share
     private func copyToMountedShare(file: URL, destination: URL, device: DiscoveredDevice) {
         let transferId = UUID()
@@ -114,14 +184,18 @@ class TidalDropService: ObservableObject {
         
         let fileSize = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) } ?? 0
         
+        // Resolve the best subfolder within the share (Public/Drop Box > Public > root)
+        let resolvedDestination = resolveDropDestination(within: destination)
+        
         print("🌊 TidalDrop: Attempting copy")
         print("   Source: \(file.path)")
-        print("   Destination: \(destination.path)")
+        print("   Share root: \(destination.path)")
+        print("   Resolved destination: \(resolvedDestination.path)")
         print("   File: \(fileName) (\(fileSize) bytes)")
         print("   Security scoped access: \(didStartAccess)")
         
         // Check if destination is writable
-        let isWritable = FileManager.default.isWritableFile(atPath: destination.path)
+        let isWritable = FileManager.default.isWritableFile(atPath: resolvedDestination.path)
         print("   Destination writable: \(isWritable)")
         
         if !isWritable {
@@ -160,7 +234,7 @@ class TidalDropService: ObservableObject {
         
         // Perform write on background queue
         DispatchQueue.global(qos: .userInitiated).async {
-            let destinationFile = destination.appendingPathComponent(fileName)
+            let destinationFile = resolvedDestination.appendingPathComponent(fileName)
             
             print("🌊 TidalDrop: Writing to: \(destinationFile.path)")
             
@@ -297,17 +371,35 @@ class TidalDropService: ObservableObject {
         }
         
         content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("⚠️ TidalDrop: Failed to send completion notification: \(error.localizedDescription)")
+            }
+        }
     }
     
     private func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if granted {
+                print("✅ TidalDrop: Notification permission granted")
+            } else if let error = error {
+                print("❌ TidalDrop: Notification permission error: \(error.localizedDescription)")
+            } else {
+                print("⚠️ TidalDrop: Notification permission denied")
+            }
+        }
     }
     
     func startListening() {
         do {
             let params = NWParameters.tcp
             listener = try NWListener(using: params, on: 5902)
+            
+            // Advertise the service via Bonjour so other TidalDrift instances can find it
+            let name = NetworkUtils.sanitizedComputerName
+            listener?.service = NWListener.Service(name: name, type: "_tidaldrop._tcp")
             
             listener?.stateUpdateHandler = { [weak self] state in
                 print("🌊 TidalDrop: Listener state: \(state)")
@@ -347,6 +439,19 @@ class TidalDropService: ObservableObject {
     private func handleIncomingConnection(_ connection: NWConnection) {
         print("🌊 TidalDrop: Handling incoming connection from \(connection.endpoint)")
         
+        // Extract remote IP for matching in UI
+        let remoteIP: String
+        if case .hostPort(let host, _) = connection.endpoint {
+            let hostStr = "\(host)"
+            if let percentIndex = hostStr.firstIndex(of: "%") {
+                remoteIP = String(hostStr[..<percentIndex])
+            } else {
+                remoteIP = hostStr
+            }
+        } else {
+            remoteIP = "\(connection.endpoint)"
+        }
+        
         connection.stateUpdateHandler = { state in
             print("🌊 TidalDrop: Incoming connection state: \(state)")
         }
@@ -385,16 +490,16 @@ class TidalDropService: ObservableObject {
                 }
                 
                 print("🌊 TidalDrop: Received metadata - File: \(metadata.fileName), Size: \(metadata.fileSize) bytes")
-                self.setupIncomingTransfer(connection, metadata: metadata)
+                self.setupIncomingTransfer(connection, metadata: metadata, remoteIP: remoteIP)
             }
         }
     }
     
-    private func setupIncomingTransfer(_ connection: NWConnection, metadata: FileMetadata) {
+    private func setupIncomingTransfer(_ connection: NWConnection, metadata: FileMetadata, remoteIP: String) {
         let transferId = UUID()
         let destinationFolder = AppState.shared.settings.tidalDropFolder
         
-        print("🌊 TidalDrop: Setting up incoming transfer")
+        print("🌊 TidalDrop: Setting up incoming transfer from \(remoteIP)")
         print("   Destination folder: \(destinationFolder.path)")
         
         // Create destination folder
@@ -415,12 +520,15 @@ class TidalDropService: ObservableObject {
             progress: 0,
             isIncoming: true,
             status: .transferring,
-            remoteEndpoint: "\(connection.endpoint)"
+            remoteEndpoint: remoteIP
         )
         
         DispatchQueue.main.async {
             self.activeTransfers[transferId] = transfer
             self.notifyTransferStarted(fileName: metadata.fileName, isIncoming: true)
+            
+            // Audible alert for recipient
+            NSSound.beep()
         }
         
         // Remove existing file if present
@@ -556,15 +664,26 @@ class TidalDropService: ObservableObject {
     }
     
     private func performSend(_ connection: NWConnection, transferId: UUID, url: URL, name: String, size: Int64, connectionId: UUID) {
+        // Handle security-scoped access for sandboxed apps
+        let didStartAccess = url.startAccessingSecurityScopedResource()
+        print("🌊 TidalDrop: Security scoped access started: \(didStartAccess) for \(url.lastPathComponent)")
+        
         // Read file data first
-        guard let fileData = try? Data(contentsOf: url) else {
-            print("❌ TidalDrop: Cannot read file for sending")
+        let fileData: Data
+        do {
+            fileData = try Data(contentsOf: url)
+            print("🌊 TidalDrop: Successfully read \(fileData.count) bytes from \(url.lastPathComponent)")
+        } catch {
+            print("❌ TidalDrop: Cannot read file for sending: \(error.localizedDescription)")
+            if didStartAccess { url.stopAccessingSecurityScopedResource() }
             cleanupConnection(id: connectionId)
             DispatchQueue.main.async {
-                self.activeTransfers[transferId]?.status = .failed("Cannot read file")
+                self.activeTransfers[transferId]?.status = .failed("Cannot read file: \(error.localizedDescription)")
             }
             return
         }
+        
+        if didStartAccess { url.stopAccessingSecurityScopedResource() }
         
         performSendWithData(connection, transferId: transferId, name: name, size: size, fileData: fileData, connectionId: connectionId)
     }
@@ -617,15 +736,22 @@ class TidalDropService: ObservableObject {
             self.activeTransfers[transferId]?.status = .completed
         }
         
+        // Final notification
         let content = UNMutableNotificationContent()
         content.title = isIncoming ? "TidalDrop Received" : "TidalDrop Sent"
         let folderName = AppState.shared.settings.tidalDropFolder.lastPathComponent
         content.body = isIncoming ? "'\(fileName)' saved to \(folderName)" : "'\(fileName)' sent successfully"
         content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
         
-        // Auto-clear completed transfer after 5 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("⚠️ TidalDrop: Failed to send completion notification: \(error.localizedDescription)")
+            }
+        }
+        
+        // Auto-clear completed transfer after 10 seconds (increased from 5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
             self.activeTransfers.removeValue(forKey: transferId)
         }
     }
@@ -635,6 +761,12 @@ class TidalDropService: ObservableObject {
         content.title = isIncoming ? "Incoming TidalDrop" : "Sending TidalDrop"
         content.body = isIncoming ? "Receiving '\(fileName)'..." : "Transferring '\(fileName)'..."
         content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("⚠️ TidalDrop: Failed to send start notification: \(error.localizedDescription)")
+            }
+        }
     }
 }

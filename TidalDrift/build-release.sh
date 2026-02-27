@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# TidalDrift Release Builder v1.3.15
+# TidalDrift Release Builder v1.3.16
 # Uses xcodebuild + ditto --norsrc to avoid resource fork issues
 # Requires: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
@@ -8,7 +8,7 @@ set -e
 
 APP_NAME="TidalDrift"
 BUNDLE_ID="com.goldbergconsulting.tidaldrift"
-VERSION="1.3.15"
+VERSION="1.4.1"
 DMG_NAME="${APP_NAME}-${VERSION}"
 
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -38,10 +38,21 @@ pkill -9 -f "TidalDrift" 2>/dev/null || true; pkill -9 swift 2>/dev/null || true
 rm -rf "$APP_BUNDLE" build-xcode
 echo -e "${GREEN}✓ Cleanup${NC}"
 
+# Reset ALL TCC permissions (code signature changes on every rebuild, invalidating old grants)
+for TCC_SERVICE in ScreenCapture Accessibility ListenEvent LocalNetwork; do
+    tccutil reset "$TCC_SERVICE" "$BUNDLE_ID" 2>/dev/null || true
+done
+echo -e "${GREEN}✓ TCC permissions reset: ScreenCapture, Accessibility, ListenEvent, LocalNetwork${NC}"
+
 # Certificate
 DEV_ID=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
 [ -z "$DEV_ID" ] && echo -e "${RED}❌ No Developer ID${NC}" && exit 1
 echo -e "${GREEN}✓ Certificate${NC}"
+
+# Clean source xattrs before build
+echo -e "${BLUE}🧹 Cleaning source xattrs...${NC}"
+find Resources -type f -exec xattr -c {} \; 2>/dev/null || true
+echo -e "${GREEN}✓ Source cleaned${NC}"
 
 # Build
 echo -e "${BLUE}🔨 Building...${NC}"
@@ -52,6 +63,7 @@ echo -e "${GREEN}✓ Build${NC}"
 
 # Create bundle using ditto --norsrc (strips resource forks)
 echo -e "${BLUE}📦 Creating bundle...${NC}"
+rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 ditto --norsrc ./build-xcode/Build/Products/Release/TidalDrift "$APP_BUNDLE/Contents/MacOS/TidalDrift"
 [ -f "Resources/AppIcon.icns" ] && ditto --norsrc Resources/AppIcon.icns "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
@@ -70,15 +82,19 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSLocalNetworkUsageDescription</key><string>TidalDrift discovers Macs on your network.</string>
-    <key>NSBonjourServices</key><array><string>_rfb._tcp</string><string>_smb._tcp</string><string>_ssh._tcp</string><string>_tidaldrift._tcp</string><string>_tidaldrop._tcp</string></array>
+    <key>NSBonjourServices</key><array><string>_rfb._tcp</string><string>_smb._tcp</string><string>_afpovertcp._tcp</string><string>_ssh._tcp</string><string>_tidaldrift._tcp</string><string>_tidaldrop._tcp</string><string>_tidaldrift-cast._udp</string><string>_tidalclip._tcp</string><string>_tidalstream._tcp</string></array>
 </dict></plist>
 EOF
 echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
-# CRITICAL: Remove FinderInfo xattr before signing (Finder adds this automatically)
-xattr -d com.apple.FinderInfo "$APP_BUNDLE" 2>/dev/null || true
+# CRITICAL: Remove ALL xattrs from bundle before signing
+echo -e "${BLUE}🧹 Removing all xattrs from bundle...${NC}"
+find "$APP_BUNDLE" -type f -exec xattr -c {} \; 2>/dev/null || true
+find "$APP_BUNDLE" -type d -exec xattr -c {} \; 2>/dev/null || true
+xattr -rc "$APP_BUNDLE" 2>/dev/null || true
 
 echo -e "${GREEN}✓ Bundle${NC}"
 
@@ -115,6 +131,30 @@ else
 fi
 
 rm -rf build-xcode "$APP_BUNDLE"
+
+# Copy to network share for easy install on other Macs
+SMB_MOUNT="/Volumes/Eli Goldberg's Public Folder"
+SMB_URL="smb://US_LDHG427053._smb._tcp.local/Eli Goldberg's Public Folder/"
+
+if [ -d "$SMB_MOUNT" ]; then
+    echo -e "${BLUE}📂 Copying to network share...${NC}"
+    cp "$DMG_FINAL" "$SMB_MOUNT/"
+    echo -e "${GREEN}✓ Copied to $SMB_MOUNT/${NC}"
+else
+    echo -e "${BLUE}📂 Mounting network share...${NC}"
+    if osascript -e "mount volume \"$SMB_URL\"" 2>/dev/null; then
+        sleep 2
+        if [ -d "$SMB_MOUNT" ]; then
+            cp "$DMG_FINAL" "$SMB_MOUNT/"
+            echo -e "${GREEN}✓ Copied to $SMB_MOUNT/${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Mount succeeded but folder not found — copy manually${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️  Could not mount network share — copy manually${NC}"
+        echo "   open \"$SMB_URL\""
+    fi
+fi
 
 echo ""
 echo -e "${GREEN}🎉 Done! ${DMG_NAME}.dmg ($(du -h "$DMG_FINAL" | cut -f1))${NC}"
