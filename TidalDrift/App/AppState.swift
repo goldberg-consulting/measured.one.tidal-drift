@@ -69,7 +69,8 @@ class AppState: ObservableObject {
     
     func refreshLocalInfo() {
         localIPAddress = NetworkUtils.getLocalIPAddress() ?? "Unknown"
-        computerName = NetworkUtils.computerName
+        let custom = settings.tidalDriftDisplayName
+        computerName = custom.isEmpty ? NetworkUtils.computerName : custom
         
         // Defer sharing status check to avoid blocking UI
         Task.detached(priority: .background) { [weak self] in

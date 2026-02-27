@@ -22,6 +22,9 @@ struct AppSettings: Codable, Equatable {
     // TidalDrop settings
     var tidalDropDestination: String
     
+    // Bonjour display name (persists across IP changes)
+    var tidalDriftDisplayName: String
+    
     init(launchAtLogin: Bool = false,
          scanIntervalSeconds: Int = 30,
          showNotifications: Bool = true,
@@ -37,7 +40,8 @@ struct AppSettings: Codable, Equatable {
          wakeOnLANPort: Int = 9,
          wakeOnLANRetries: Int = 3,
          autoWakeBeforeConnect: Bool = true,
-         tidalDropDestination: String = "") {
+         tidalDropDestination: String = "",
+         tidalDriftDisplayName: String = "") {
         self.launchAtLogin = launchAtLogin
         self.scanIntervalSeconds = scanIntervalSeconds
         self.showNotifications = showNotifications
@@ -54,6 +58,7 @@ struct AppSettings: Codable, Equatable {
         self.wakeOnLANRetries = wakeOnLANRetries
         self.autoWakeBeforeConnect = autoWakeBeforeConnect
         self.tidalDropDestination = tidalDropDestination
+        self.tidalDriftDisplayName = tidalDriftDisplayName
     }
     
     /// Returns the TidalDrop destination folder, defaulting to ~/Public/Drop Box

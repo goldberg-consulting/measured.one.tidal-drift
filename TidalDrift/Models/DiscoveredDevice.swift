@@ -20,6 +20,15 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
     var peerMacOSVersion: String?
     var peerUserName: String?
     var peerUptimeHours: Int?
+    var peerTidalDriftName: String?
+    
+    /// Display name: prefer the peer's custom TidalDrift name, fall back to discovered name
+    var displayName: String {
+        if let tdName = peerTidalDriftName, !tdName.isEmpty {
+            return tdName
+        }
+        return name
+    }
     
     /// Stable identifier based on name + IP for credential storage
     var stableId: String {
@@ -42,7 +51,8 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
          peerMemoryGB: Int? = nil,
          peerMacOSVersion: String? = nil,
          peerUserName: String? = nil,
-         peerUptimeHours: Int? = nil) {
+         peerUptimeHours: Int? = nil,
+         peerTidalDriftName: String? = nil) {
         self.id = id
         self.name = name
         self.hostname = hostname
@@ -60,6 +70,7 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
         self.peerMacOSVersion = peerMacOSVersion
         self.peerUserName = peerUserName
         self.peerUptimeHours = peerUptimeHours
+        self.peerTidalDriftName = peerTidalDriftName
     }
     
     enum ServiceType: String, Codable, CaseIterable {

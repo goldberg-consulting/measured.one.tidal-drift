@@ -58,7 +58,15 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     
     private let serviceType = "_tidaldrift._tcp"
     private let dropServiceType = "_tidaldrop._tcp"
-    private let deviceName = NetworkUtils.sanitizedComputerName
+    
+    /// The advertised name: custom TidalDrift display name if set, otherwise system computer name
+    var advertisedName: String {
+        let custom = AppState.shared.settings.tidalDriftDisplayName
+        if !custom.isEmpty {
+            return custom.replacingOccurrences(of: "'", with: "").replacingOccurrences(of: " ", with: "-")
+        }
+        return NetworkUtils.sanitizedComputerName
+    }
     
     private let localInfo: PeerInfo
     
@@ -75,6 +83,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         let tidalDriftVersion: String
         let screenSharingEnabled: Bool
         let fileSharingEnabled: Bool
+        var tidalDriftName: String?
     }
     
     private override init() {
@@ -141,7 +150,8 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/dns-sd")
         
-        let txtParts = [
+        let customName = AppState.shared.settings.tidalDriftDisplayName
+        var txtParts = [
             "model=\(localInfo.modelName)",
             "modelId=\(localInfo.modelIdentifier)",
             "cpu=\(localInfo.processorInfo)",
@@ -154,8 +164,12 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             "file=\(localInfo.fileSharingEnabled ? "1" : "0")",
             "ip=\(currentIP)"
         ]
+        if !customName.isEmpty {
+            txtParts.append("tdname=\(customName)")
+        }
         
-        var args = ["-R", deviceName, serviceType, "local.", "5959"]
+        let advName = advertisedName
+        var args = ["-R", advName, serviceType, "local.", "5959"]
         args.append(contentsOf: txtParts)
         process.arguments = args
         
@@ -165,7 +179,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         do {
             try process.run()
             dnssdProcess = process
-            Self.log("✅ dns-sd advertising: \(deviceName) on \(serviceType) with \(txtParts.count) TXT fields")
+            Self.log("✅ dns-sd advertising: \(advName) on \(serviceType) with \(txtParts.count) TXT fields")
             DispatchQueue.main.async {
                 self.isAdvertising = true
             }
@@ -200,6 +214,12 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         Self.log("Stopped advertising")
     }
     
+    func restartAdvertising() {
+        stopAdvertising()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.startAdvertising()
+        }
+    }
     
     private func createTXTRecord() -> NWTXTRecord {
         var txt = NWTXTRecord()
@@ -317,7 +337,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                     if let idx = serviceTypeIndex, idx + 1 < components.count {
                         let instanceName = components[(idx + 1)...].joined(separator: " ")
                         
-                        let isSelf = instanceName == deviceName
+                        let isSelf = instanceName == advertisedName
                         Self.log("🔎 Discovered via dns-sd: '\(instanceName)'\(isSelf ? " (self)" : "")")
                         
                         // Resolve the service to get IP
@@ -564,7 +584,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             actualIP = localInfo.ipAddress
         }
         
-        let isSelf = name == deviceName
+        let isSelf = name == advertisedName
         
         // Get TXT record if available (thread-safe)
         txtRecordsLock.lock()
@@ -598,7 +618,8 @@ class TidalDriftPeerService: NSObject, ObservableObject {
                 uptimeHours: Int(txt?["uptime"] ?? "0") ?? 0,
                 tidalDriftVersion: version,
                 screenSharingEnabled: txt?["screen"] == "1",
-                fileSharingEnabled: txt?["file"] == "1"
+                fileSharingEnabled: txt?["file"] == "1",
+                tidalDriftName: txt?["tdname"]
             )
         }
         
@@ -627,7 +648,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     private func processBrowseResults(_ results: Set<NWBrowser.Result>) {
         for result in results {
             if case .service(let name, let type, let domain, _) = result.endpoint {
-                let isSelf = name == deviceName
+                let isSelf = name == advertisedName
                 Self.log("Discovered service: '\(name)'\(isSelf ? " (self)" : "")")
                 
                 // Extract TXT record if available
@@ -716,7 +737,8 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             uptimeHours: Int(txt?["uptime"] ?? "0") ?? 0,
             tidalDriftVersion: txt?["version"] ?? "1.0",
             screenSharingEnabled: txt?["screen"] == "1",
-            fileSharingEnabled: txt?["file"] == "1"
+            fileSharingEnabled: txt?["file"] == "1",
+            tidalDriftName: txt?["tdname"]
         )
         
         DispatchQueue.main.async {
@@ -868,7 +890,7 @@ extension TidalDriftPeerService: NetServiceBrowserDelegate {
         Self.log("🔎 Discovered service: '\(service.name)' type: \(service.type)")
         
         // Note: For single-computer testing, we don't skip ourselves
-        let isSelf = service.name == deviceName
+        let isSelf = service.name == advertisedName
         if isSelf {
             Self.log("(This is our own service)")
         }
@@ -947,7 +969,8 @@ extension TidalDriftPeerService: NetServiceBrowserDelegate {
             uptimeHours: Int(txtValues["uptime"] ?? "0") ?? 0,
             tidalDriftVersion: txtValues["version"] ?? "1.0",
             screenSharingEnabled: txtValues["screen"] == "1",
-            fileSharingEnabled: txtValues["file"] == "1"
+            fileSharingEnabled: txtValues["file"] == "1",
+            tidalDriftName: txtValues["tdname"]
         )
         
         DispatchQueue.main.async {
