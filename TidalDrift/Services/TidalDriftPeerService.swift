@@ -416,6 +416,11 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         resolveProcesses[name] = nil
         
         resolveLock.unlock()
+        
+        // Evict any orphaned TXT record that was never consumed by addDiscoveredPeer
+        txtRecordsLock.lock()
+        resolvedTXTRecords.removeValue(forKey: name)
+        txtRecordsLock.unlock()
     }
     
     private var resolvedTXTRecords: [String: [String: String]] = [:]

@@ -389,7 +389,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         return false
     }
     
-    private var receivedInputCount = 0
+    private var receivedInputCount: UInt64 = 0
     
     func udpTransport(_ transport: UDPTransport, didReceivePacket packet: LocalCastPacket, from endpoint: NWEndpoint) {
         // Update client endpoint if not already set
