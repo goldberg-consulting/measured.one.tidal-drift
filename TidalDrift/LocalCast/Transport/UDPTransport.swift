@@ -53,7 +53,14 @@ class UDPTransport {
     
     /// When set, all outgoing packets are encrypted and incoming packets are decrypted.
     /// Auth handshake packets travel in plaintext (prefix 0x00) before this is set.
-    var sessionKey: SymmetricKey?
+    /// Protected by `sessionKeyLock`.
+    private var _sessionKey: SymmetricKey?
+    private let sessionKeyLock = NSLock()
+    
+    var sessionKey: SymmetricKey? {
+        get { sessionKeyLock.lock(); defer { sessionKeyLock.unlock() }; return _sessionKey }
+        set { sessionKeyLock.lock(); _sessionKey = newValue; sessionKeyLock.unlock() }
+    }
     
     private var listener: NWListener?
     private var connections: [String: NWConnection] = [:] // Key by endpoint description for reliable lookup
@@ -69,6 +76,7 @@ class UDPTransport {
     private var fragmentBuffers: [UInt32: [UInt16: Data]] = [:] // frameId -> [fragmentIndex -> data]
     private var fragmentCounts: [UInt32: UInt16] = [:] // frameId -> totalFragments
     private let fragmentLock = NSLock()
+    private var oldestBufferedFrameId: UInt32 = 0
     
     // Safety limits for fragment reassembly
     // Quality-focused encoding at 4K can produce keyframes of 2-5 MB.
@@ -397,13 +405,14 @@ class UDPTransport {
             fragmentBuffers[header.frameId] = [:]
             fragmentCounts[header.frameId] = header.totalFragments
             
-            // Evict stale frames aggressively -- keep only the most recent N
+            if oldestBufferedFrameId == 0 { oldestBufferedFrameId = header.frameId }
+            
             while fragmentBuffers.count > maxBufferedFrames {
-                if let oldestFrame = fragmentBuffers.keys.min() {
-                    fragmentBuffers.removeValue(forKey: oldestFrame)
-                    fragmentCounts.removeValue(forKey: oldestFrame)
-                } else {
-                    break
+                fragmentBuffers.removeValue(forKey: oldestBufferedFrameId)
+                fragmentCounts.removeValue(forKey: oldestBufferedFrameId)
+                oldestBufferedFrameId += 1
+                while !fragmentBuffers.isEmpty && fragmentBuffers[oldestBufferedFrameId] == nil {
+                    oldestBufferedFrameId += 1
                 }
             }
         }

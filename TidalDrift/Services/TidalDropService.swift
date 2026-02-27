@@ -44,6 +44,7 @@ class TidalDropService: ObservableObject {
     
     // Store active connections to prevent premature deallocation
     private var activeConnections: [UUID: NWConnection] = [:]
+    private var incomingConnections: [UUID: NWConnection] = [:]
     private let connectionsLock = NSLock()
     
     private init() {
@@ -436,7 +437,28 @@ class TidalDropService: ObservableObject {
         }
     }
     
+    func stopListening() {
+        listener?.cancel()
+        listener = nil
+        
+        connectionsLock.lock()
+        activeConnections.values.forEach { $0.cancel() }
+        activeConnections.removeAll()
+        incomingConnections.values.forEach { $0.cancel() }
+        incomingConnections.removeAll()
+        connectionsLock.unlock()
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.isListening = false
+        }
+    }
+    
     private func handleIncomingConnection(_ connection: NWConnection) {
+        let connID = UUID()
+        connectionsLock.lock()
+        incomingConnections[connID] = connection
+        connectionsLock.unlock()
+        
         print("🌊 TidalDrop: Handling incoming connection from \(connection.endpoint)")
         
         // Extract remote IP for matching in UI
@@ -452,8 +474,17 @@ class TidalDropService: ObservableObject {
             remoteIP = "\(connection.endpoint)"
         }
         
-        connection.stateUpdateHandler = { state in
+        connection.stateUpdateHandler = { [weak self] state in
             print("🌊 TidalDrop: Incoming connection state: \(state)")
+            if case .cancelled = state {
+                self?.connectionsLock.lock()
+                self?.incomingConnections.removeValue(forKey: connID)
+                self?.connectionsLock.unlock()
+            } else if case .failed = state {
+                self?.connectionsLock.lock()
+                self?.incomingConnections.removeValue(forKey: connID)
+                self?.connectionsLock.unlock()
+            }
         }
         
         connection.start(queue: queue)

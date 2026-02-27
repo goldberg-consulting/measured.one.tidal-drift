@@ -23,6 +23,37 @@ class SharingConfigurationService: ObservableObject, @unchecked Sendable {
         }
     }
     
+    /// Run a Process without blocking the Swift concurrency thread pool.
+    /// Uses `terminationHandler` instead of `waitUntilExit()`.
+    private func runProcess(_ executablePath: String, arguments: [String]) async -> (output: String, exitCode: Int32) {
+        await withCheckedContinuation { continuation in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: executablePath)
+            task.arguments = arguments
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+            
+            let resumed = AtomicFlag(false)
+            task.terminationHandler = { process in
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                if resumed.compareAndSwap(expected: false, desired: true) {
+                    continuation.resume(returning: (output, process.terminationStatus))
+                }
+            }
+            
+            do {
+                try task.run()
+            } catch {
+                if resumed.compareAndSwap(expected: false, desired: true) {
+                    continuation.resume(returning: ("", -1))
+                }
+            }
+        }
+    }
+    
     @MainActor
     func refreshStatus() async {
         screenSharingEnabled = await isScreenSharingEnabled()
@@ -31,30 +62,8 @@ class SharingConfigurationService: ObservableObject, @unchecked Sendable {
     }
     
     func isScreenSharingEnabled() async -> Bool {
-        // Try multiple methods to detect screen sharing status
-        
-        // Method 1: Check if screensharing service is loaded via launchctl print
-        let method1 = await withCheckedContinuation { continuation in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            task.arguments = ["print", "system/com.apple.screensharing"]
-            
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-            
-            do {
-                try task.run()
-                task.waitUntilExit()
-                continuation.resume(returning: task.terminationStatus == 0)
-            } catch {
-                continuation.resume(returning: false)
-            }
-        }
-        
-        if method1 { return true }
-        
-        // Method 2: Fast port check using NWConnection (much faster than system_profiler/lsof)
+        let result = await runProcess("/bin/launchctl", arguments: ["print", "system/com.apple.screensharing"])
+        if result.exitCode == 0 { return true }
         return await checkLocalPort(5900)
     }
     
@@ -119,30 +128,8 @@ class SharingConfigurationService: ObservableObject, @unchecked Sendable {
     }
     
     func isFileSharingEnabled() async -> Bool {
-        // Try multiple methods to detect file sharing status
-        
-        // Method 1: Check if smbd service is loaded
-        let method1 = await withCheckedContinuation { continuation in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            task.arguments = ["print", "system/com.apple.smbd"]
-            
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-            
-            do {
-                try task.run()
-                task.waitUntilExit()
-                continuation.resume(returning: task.terminationStatus == 0)
-            } catch {
-                continuation.resume(returning: false)
-            }
-        }
-        
-        if method1 { return true }
-        
-        // Method 2: Fast port check using NWConnection (much faster than lsof)
+        let result = await runProcess("/bin/launchctl", arguments: ["print", "system/com.apple.smbd"])
+        if result.exitCode == 0 { return true }
         return await checkLocalPort(445)
     }
     
@@ -157,78 +144,20 @@ class SharingConfigurationService: ObservableObject, @unchecked Sendable {
             return true
         }
         
-        // Method 2: Check via launchctl list as fallback
-        let launchctlCheck = await withCheckedContinuation { continuation in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            task.arguments = ["list"]
-            
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            
-            do {
-                try task.run()
-                task.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                let found = output.contains("com.openssh.sshd")
-                logger.info("launchctl list check: \(found ? "FOUND com.openssh.sshd" : "NOT FOUND")")
-                continuation.resume(returning: found)
-            } catch {
-                logger.error("launchctl list check: ERROR - \(error)")
-                continuation.resume(returning: false)
-            }
-        }
-        
+        let result = await runProcess("/bin/launchctl", arguments: ["list"])
+        let launchctlCheck = result.output.contains("com.openssh.sshd")
         logger.info("Result: SSH \(launchctlCheck ? "ENABLED" : "DISABLED") (launchctl fallback)")
         return launchctlCheck
     }
     
     func isFirewallEnabled() async -> Bool {
-        return await withCheckedContinuation { continuation in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/libexec/ApplicationFirewall/socketfilterfw")
-            task.arguments = ["--getglobalstate"]
-            
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = Pipe()
-            
-            do {
-                try task.run()
-                task.waitUntilExit()
-                
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                // Output is "Firewall is enabled. (State = 1)" or "Firewall is disabled. (State = 0)"
-                continuation.resume(returning: output.lowercased().contains("enabled"))
-            } catch {
-                continuation.resume(returning: false)
-            }
-        }
+        let result = await runProcess("/usr/libexec/ApplicationFirewall/socketfilterfw", arguments: ["--getglobalstate"])
+        return result.output.lowercased().contains("enabled")
     }
     
     func isFirewallBlockingAll() async -> Bool {
-        return await withCheckedContinuation { continuation in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/libexec/ApplicationFirewall/socketfilterfw")
-            task.arguments = ["--getblockall"]
-            
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = Pipe()
-            
-            do {
-                try task.run()
-                task.waitUntilExit()
-                
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                continuation.resume(returning: output.lowercased().contains("enabled"))
-            } catch {
-                continuation.resume(returning: false)
-            }
-        }
+        let result = await runProcess("/usr/libexec/ApplicationFirewall/socketfilterfw", arguments: ["--getblockall"])
+        return result.output.lowercased().contains("enabled")
     }
     
     // MARK: - Toggle Sharing Services
@@ -365,42 +294,15 @@ class SharingConfigurationService: ObservableObject, @unchecked Sendable {
     }
     
     private func runAppleScript(_ source: String) async -> Bool {
-        return await withCheckedContinuation { continuation in
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            task.arguments = ["-e", source]
-            
-            // Capture output for debugging
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            task.standardOutput = stdoutPipe
-            task.standardError = stderrPipe
-            
-            logger.info("Running AppleScript: \(source.prefix(150))...")
-            
-            do {
-                try task.run()
-                task.waitUntilExit()
-                
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-                let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-                
-                logger.info("osascript exit code: \(task.terminationStatus)")
-                if !stdout.isEmpty {
-                    logger.info("osascript stdout: \(stdout, privacy: .public)")
-                }
-                if !stderr.isEmpty {
-                    logger.error("osascript stderr: \(stderr, privacy: .public)")
-                }
-                
-                continuation.resume(returning: task.terminationStatus == 0)
-            } catch {
-                logger.error("Failed to run osascript: \(error)")
-                continuation.resume(returning: false)
-            }
+        logger.info("Running AppleScript: \(source.prefix(150))...")
+        let result = await runProcess("/usr/bin/osascript", arguments: ["-e", source])
+        
+        logger.info("osascript exit code: \(result.exitCode)")
+        if !result.output.isEmpty {
+            logger.info("osascript output: \(result.output, privacy: .public)")
         }
+        
+        return result.exitCode == 0
     }
     
     /// Public method to execute arbitrary AppleScript (for user creation, etc.)
