@@ -40,9 +40,12 @@ class VideoDecoder {
         }
         
         // Check if data starts with Annex B start code (00 00 00 01 or 00 00 01)
-        let bytes = [UInt8](data)
-        let hasAnnexBStartCode = (bytes.count >= 4 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 1) ||
-                                  (bytes.count >= 3 && bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 1)
+        let hasAnnexBStartCode = data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> Bool in
+            guard let b = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
+            let n = buf.count
+            return (n >= 4 && b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 1) ||
+                   (n >= 3 && b[0] == 0 && b[1] == 0 && b[2] == 1)
+        }
         
         if hasAnnexBStartCode {
             // Parse NAL units from Annex B format
@@ -423,7 +426,7 @@ class VideoDecoder {
         // Convert Annex B NAL to AVCC format (length-prefixed)
         // CRITICAL: We must keep this data alive until the decode completes!
         let length = UInt32(nalUnit.count).bigEndian
-        var lengthPrefixed = Data()
+        var lengthPrefixed = Data(capacity: 4 + nalUnit.count)
         withUnsafeBytes(of: length) { lengthPrefixed.append(contentsOf: $0) }
         lengthPrefixed.append(nalUnit)
         

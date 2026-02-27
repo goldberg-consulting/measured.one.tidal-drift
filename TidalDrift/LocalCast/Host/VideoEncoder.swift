@@ -248,10 +248,9 @@ class VideoEncoder {
         
         guard let pointer = pointer else { return }
         
-        let avccData = Data(bytes: pointer, count: length)
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         
-        var packetData = Data()
+        var packetData = Data(capacity: length + 128)
         
         // 3. For keyframes, prepend parameter sets (SPS/PPS) with Annex B start codes
         if isKeyFrame {
@@ -265,6 +264,7 @@ class VideoEncoder {
         }
         
         // 4. Convert AVCC data to Annex B format (replace length prefixes with start codes)
+        let avccData = Data(bytes: pointer, count: length)
         let annexBData = encoder.convertAVCCToAnnexB(avccData)
         packetData.append(annexBData)
         
@@ -275,30 +275,34 @@ class VideoEncoder {
         encoder.delegate?.videoEncoder(encoder, didOutput: packetData, isKeyFrame: isKeyFrame, timestamp: timestamp)
     }
     
-    /// Convert AVCC format (4-byte length prefix) to Annex B format (start codes)
+    private static let annexBStartCode: [UInt8] = [0, 0, 0, 1]
+    
+    /// Convert AVCC format (4-byte length prefix) to Annex B format (start codes).
+    /// Works directly with the raw pointer to avoid copying into [UInt8].
     private func convertAVCCToAnnexB(_ avccData: Data) -> Data {
-        var annexBData = Data()
-        let bytes = [UInt8](avccData)
-        var offset = 0
+        var annexBData = Data(capacity: avccData.count + 32)
         
-        while offset + 4 <= bytes.count {
-            // Read 4-byte length (big endian)
-            let nalLength = Int(bytes[offset]) << 24 | Int(bytes[offset+1]) << 16 | Int(bytes[offset+2]) << 8 | Int(bytes[offset+3])
-            offset += 4
+        avccData.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
+            guard let base = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            let count = buf.count
+            var offset = 0
             
-            if nalLength <= 0 || offset + nalLength > bytes.count {
-                // Invalid length, just append remaining data with start code
-                if offset < bytes.count {
-                    annexBData.append(Data([0, 0, 0, 1]))
-                    annexBData.append(contentsOf: bytes[offset...])
+            while offset + 4 <= count {
+                let nalLength = Int(base[offset]) << 24 | Int(base[offset+1]) << 16 | Int(base[offset+2]) << 8 | Int(base[offset+3])
+                offset += 4
+                
+                if nalLength <= 0 || offset + nalLength > count {
+                    if offset < count {
+                        annexBData.append(contentsOf: Self.annexBStartCode)
+                        annexBData.append(base + offset, count: count - offset)
+                    }
+                    break
                 }
-                break
+                
+                annexBData.append(contentsOf: Self.annexBStartCode)
+                annexBData.append(base + offset, count: nalLength)
+                offset += nalLength
             }
-            
-            // Append start code + NAL unit
-            annexBData.append(Data([0, 0, 0, 1]))
-            annexBData.append(contentsOf: bytes[offset..<(offset + nalLength)])
-            offset += nalLength
         }
         
         return annexBData

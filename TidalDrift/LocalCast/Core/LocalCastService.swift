@@ -140,10 +140,10 @@ class LocalCastService: ObservableObject {
         configuration.requireAuthentication = defaults.object(forKey: "localCastRequireAuth") as? Bool ?? true
         configuration.inputRateLimit = defaults.object(forKey: "localCastInputRateLimit") as? Int ?? 120
 
-        // Read the host password for auth
+        // Read the host password for auth (Keychain first, legacy UserDefaults fallback)
         let hostPassword: String?
         if configuration.requireAuthentication {
-            let stored = defaults.string(forKey: "localCastHostPassword") ?? ""
+            let stored = LocalCastPasswordStore.load() ?? ""
             hostPassword = stored.isEmpty ? nil : stored
             self.isAuthEnabled = hostPassword != nil
             if hostPassword == nil {
@@ -341,5 +341,57 @@ enum LocalCastError: LocalizedError {
         case .hostNotReady:
             return "Remote Mac is not ready to share"
         }
+    }
+}
+
+// MARK: - Secure Password Storage
+
+/// Stores the LocalCast host password in the Keychain instead of UserDefaults.
+/// Falls back to reading (and migrating) the legacy UserDefaults key.
+enum LocalCastPasswordStore {
+    private static let service = "com.tidaldrift.localcast"
+    private static let account = "hostPassword"
+    private static let legacyKey = "localCastHostPassword"
+    
+    static func save(_ password: String) {
+        let data = Data(password.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+        
+        if !password.isEmpty {
+            var addQuery = query
+            addQuery[kSecValueData as String] = data
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            SecItemAdd(addQuery as CFDictionary, nil)
+        }
+        
+        // Clear the legacy UserDefaults entry
+        UserDefaults.standard.removeObject(forKey: legacyKey)
+    }
+    
+    static func load() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+           let data = result as? Data {
+            return String(data: data, encoding: .utf8)
+        }
+        
+        // Migrate from legacy UserDefaults
+        if let legacy = UserDefaults.standard.string(forKey: legacyKey), !legacy.isEmpty {
+            save(legacy)
+            return legacy
+        }
+        return nil
     }
 }

@@ -36,12 +36,14 @@ private struct FragmentHeader {
     
     static func deserialize(_ data: Data) -> FragmentHeader? {
         guard data.count >= size else { return nil }
-        let bytes = [UInt8](data)
-        let frameId = UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3])
-        let fragmentIndex = UInt16(bytes[4]) << 8 | UInt16(bytes[5])
-        let totalFragments = UInt16(bytes[6]) << 8 | UInt16(bytes[7])
-        let payloadLength = UInt16(bytes[8]) << 8 | UInt16(bytes[9])
-        return FragmentHeader(frameId: frameId, fragmentIndex: fragmentIndex, totalFragments: totalFragments, payloadLength: payloadLength)
+        return data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> FragmentHeader? in
+            guard let b = buf.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return nil }
+            let fid = UInt32(b[0]) << 24 | UInt32(b[1]) << 16 | UInt32(b[2]) << 8 | UInt32(b[3])
+            let fidx = UInt16(b[4]) << 8 | UInt16(b[5])
+            let ftotal = UInt16(b[6]) << 8 | UInt16(b[7])
+            let plen = UInt16(b[8]) << 8 | UInt16(b[9])
+            return FragmentHeader(frameId: fid, fragmentIndex: fidx, totalFragments: ftotal, payloadLength: plen)
+        }
     }
 }
 
@@ -61,7 +63,7 @@ class UDPTransport {
     
     // Fragmentation constants
     private let maxPayloadSize = 1400 // Larger payload per fragment (fits in 1500-byte ethernet MTU with IP/UDP headers)
-    private var frameCounter: UInt32 = 0
+    private var frameCounter: UInt32 = 0 // Protected by fragmentLock
     
     // Fragment reassembly
     private var fragmentBuffers: [UInt32: [UInt16: Data]] = [:] // frameId -> [fragmentIndex -> data]
@@ -151,12 +153,17 @@ class UDPTransport {
         connectionsLock.unlock()
     }
     
-    private var sendCount = 0
+    private let statsLock = NSLock()
+    private var _sendCount = 0
+    private var _receiveCount = 0
     
     /// Send packet using a specific connection (for replying on incoming connections)
     func send(packet: LocalCastPacket, on connection: NWConnection) {
         let raw = packet.serialize()
-        sendCount += 1
+        statsLock.lock()
+        _sendCount += 1
+        let count = _sendCount
+        statsLock.unlock()
         
         // Encrypt or wrap with plaintext flag
         let data: Data
@@ -172,7 +179,7 @@ class UDPTransport {
         
         // Log non-video packets (input events, heartbeats, etc.)
         if packet.type != .videoFrame {
-            print("📡 UDPTransport.send(on:): \(packet.type) #\(sendCount), \(data.count) bytes, conn state: \(connection.state)")
+            print("📡 UDPTransport.send(on:): \(packet.type) #\(count), \(data.count) bytes, conn state: \(connection.state)")
         }
         
         // Warn if connection not ready
@@ -205,8 +212,10 @@ class UDPTransport {
     }
     
     private func sendFragmented(data: Data, on connection: NWConnection) {
+        fragmentLock.lock()
         frameCounter += 1
         let frameId = frameCounter
+        fragmentLock.unlock()
         
         let payloadSize = maxPayloadSize - FragmentHeader.size
         let totalFragments = UInt16((data.count + payloadSize - 1) / payloadSize)
@@ -325,14 +334,14 @@ class UDPTransport {
         }
     }
     
-    private var receiveCount = 0
-    
     private func handleReceivedData(_ data: Data, from endpoint: NWEndpoint) {
-        receiveCount += 1
+        statsLock.lock()
+        _receiveCount += 1
+        let count = _receiveCount
+        statsLock.unlock()
         
-        // Log ALL received data for input debugging
-        if receiveCount <= 10 || receiveCount % 500 == 0 {
-            print("📨 UDPTransport: handleReceivedData #\(receiveCount), \(data.count) bytes from \(describeEndpoint(endpoint))")
+        if count <= 10 || count % 500 == 0 {
+            print("📨 UDPTransport: handleReceivedData #\(count), \(data.count) bytes from \(describeEndpoint(endpoint))")
         }
         
         // Parse fragment header
@@ -359,7 +368,7 @@ class UDPTransport {
             if let packet = decryptAndParse(Data(payload)) {
                 // Log non-video packets
                 if packet.type != .videoFrame {
-                    print("📨 UDPTransport: Received \(packet.type) packet #\(receiveCount), payload: \(packet.payload.count) bytes")
+                    print("📨 UDPTransport: Received \(packet.type) packet #\(count), payload: \(packet.payload.count) bytes")
                 }
                 if packet.type == .inputEvent {
                     print("🎮 UDPTransport: *** INPUT EVENT RECEIVED *** from \(describeEndpoint(endpoint))")

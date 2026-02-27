@@ -66,6 +66,12 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
     /// real cursor, which yanks it out of the viewer window creating a feedback loop.
     private var isLoopbackConnection = false
     
+    deinit {
+        transport.stopListening()
+        encoder.invalidate()
+        inputInjector.restoreApps()
+    }
+    
     init(configuration: LocalCastConfiguration, password: String? = nil) {
         self.configuration = configuration
         captureManager.delegate = self
@@ -333,7 +339,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         let castPacket = LocalCastPacket(
             type: .videoFrame,
             sequenceNumber: sequenceNumber,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: packet
         )
         
@@ -468,7 +474,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
             
         case .heartbeat:
             // Respond with heartbeat (pong)
-            let pong = LocalCastPacket(type: .heartbeat, sequenceNumber: 0, timestamp: Date().timeIntervalSince1970, payload: Data())
+            let pong = LocalCastPacket(type: .heartbeat, sequenceNumber: 0, timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970, payload: Data())
             transport.send(packet: pong, to: endpoint)
             
         case .keyframeRequest:
@@ -607,7 +613,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
             let packet = LocalCastPacket(
                 type: .appListResponse,
                 sequenceNumber: 0,
-                timestamp: Date().timeIntervalSince1970,
+                timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
                 payload: payload
             )
             
@@ -696,7 +702,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
             let packet = LocalCastPacket(
                 type: .streamAppResponse,
                 sequenceNumber: 0,
-                timestamp: Date().timeIntervalSince1970,
+                timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
                 payload: responsePayload
             )
             transport.send(packet: packet, to: endpoint)
@@ -730,7 +736,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
                 let packet = LocalCastPacket(
                     type: .streamAppResponse,
                     sequenceNumber: 0,
-                    timestamp: Date().timeIntervalSince1970,
+                    timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
                     payload: responsePayload
                 )
                 transport.send(packet: packet, to: endpoint)
@@ -776,7 +782,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         let challenge = LocalCastPacket(
             type: .authChallenge,
             sequenceNumber: 0,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: challengePayload
         )
         transport.send(packet: challenge, to: endpoint)
@@ -807,7 +813,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         let successPacket = LocalCastPacket(
             type: .authSuccess,
             sequenceNumber: 0,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: Data("AUTH-SUCCESS".utf8)
         )
         transport.send(packet: successPacket, to: endpoint)

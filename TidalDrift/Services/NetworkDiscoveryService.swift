@@ -339,8 +339,9 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
         queue.async { [weak self] in
             guard let self = self else { return }
             
-            // Use dns-sd -L to lookup the service (with timeout)
-            let result = ShellExecutor.execute("timeout 5 dns-sd -L '\(name)' _tidaldrift-cast._udp local. 2>&1 | head -20")
+            // Sanitize name to prevent shell injection from Bonjour advertisements
+            let safeName = name.replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\\", with: "")
+            let result = ShellExecutor.execute("timeout 5 dns-sd -L '\(safeName)' _tidaldrift-cast._udp local. 2>&1 | head -20")
             
             self.logger.debug("dns-sd -L output for '\(name)': \(result.output)")
             
@@ -507,8 +508,11 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
         queue.async { [weak self] in
             guard let self = self else { return }
             
-            // Use dns-sd -L to lookup the service
-            let result = ShellExecutor.execute("timeout 3 dns-sd -L '\(name)' \(type) \(domain) 2>&1 | head -10")
+            // Sanitize inputs to prevent shell injection from Bonjour advertisements
+            let safeName = name.replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\\", with: "")
+            let safeType2 = type.replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\\", with: "")
+            let safeDomain = domain.replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\\", with: "")
+            let result = ShellExecutor.execute("timeout 3 dns-sd -L '\(safeName)' '\(safeType2)' '\(safeDomain)' 2>&1 | head -10")
             
             // Parse output for host info - look for "can be reached at" or hostname
             let lines = result.output.split(separator: "\n")

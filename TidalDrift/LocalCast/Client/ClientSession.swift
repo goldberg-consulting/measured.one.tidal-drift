@@ -217,7 +217,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         let packet = LocalCastPacket(
             type: .authRequest,
             sequenceNumber: 0,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: nonce
         )
         transport.send(packet: packet, to: endpoint)
@@ -268,7 +268,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         let packet = LocalCastPacket(
             type: .authComplete,
             sequenceNumber: 0,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: proof
         )
         transport.send(packet: packet, to: endpoint)
@@ -349,7 +349,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         let packet = LocalCastPacket(
             type: .inputEvent,
             sequenceNumber: UInt32(inputSendCount),
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: payload
         )
         
@@ -373,7 +373,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         let packet = LocalCastPacket(
             type: .windowResize,
             sequenceNumber: 0,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: data
         )
         transport.send(packet: packet, to: endpoint)
@@ -385,7 +385,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         let packet = LocalCastPacket(
             type: .keyframeRequest,
             sequenceNumber: 0,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: Data()
         )
         transport.send(packet: packet, to: endpoint)
@@ -410,7 +410,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         let packet = LocalCastPacket(
             type: .appListRequest,
             sequenceNumber: 0,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: Data()
         )
         transport.send(packet: packet, to: endpoint)
@@ -494,7 +494,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             let packet = LocalCastPacket(
                 type: .focusAppRequest,
                 sequenceNumber: 0,
-                timestamp: Date().timeIntervalSince1970,
+                timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
                 payload: payload
             )
             transport.send(packet: packet, to: endpoint)
@@ -523,7 +523,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             let packet = LocalCastPacket(
                 type: .isolateAppRequest,
                 sequenceNumber: 0,
-                timestamp: Date().timeIntervalSince1970,
+                timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
                 payload: payload
             )
             transport.send(packet: packet, to: endpoint)
@@ -543,7 +543,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         let packet = LocalCastPacket(
             type: .restoreAppsRequest,
             sequenceNumber: 0,
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: Data()
         )
         transport.send(packet: packet, to: endpoint)
@@ -558,7 +558,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             let packet = LocalCastPacket(
                 type: .qualityUpdate,
                 sequenceNumber: 0,
-                timestamp: Date().timeIntervalSince1970,
+                timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
                 payload: payload
             )
             transport.send(packet: packet, to: endpoint)
@@ -581,7 +581,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             let packet = LocalCastPacket(
                 type: .streamAppRequest,
                 sequenceNumber: 0,
-                timestamp: Date().timeIntervalSince1970,
+                timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
                 payload: payload
             )
             transport.send(packet: packet, to: endpoint)
@@ -607,7 +607,7 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
         let heartbeat = LocalCastPacket(
             type: .heartbeat,
             sequenceNumber: UInt32(heartbeatsSent),
-            timestamp: Date().timeIntervalSince1970,
+            timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
             payload: Data()
         )
         transport.send(packet: heartbeat, to: endpoint)
