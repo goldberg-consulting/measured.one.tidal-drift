@@ -116,8 +116,8 @@ class TidalDriftTestRunner: ObservableObject {
         allTests.append(("TidalDrop Listener Active", "Bonjour", testTidalDropListener))
         
         // Network
-        allTests.append(("UDP Port 5904 Bind", "Network", testUDPPortBind))
-        allTests.append(("TCP Port 5902 Bind", "Network", testTCPPortBind))
+        allTests.append(("UDP Port Bind", "Network", testUDPPortBind))
+        allTests.append(("TCP Port Bind", "Network", testTCPPortBind))
         allTests.append(("Loopback TCP Roundtrip", "Network", testLoopbackTCPRoundtrip))
         allTests.append(("Loopback UDP Roundtrip", "Network", testLoopbackUDPRoundtrip))
         

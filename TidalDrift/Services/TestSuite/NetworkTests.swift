@@ -4,46 +4,47 @@ import Network
 extension TidalDriftTestRunner {
     
     func testUDPPortBind() async -> (Bool, String) {
-        let testPort: UInt16 = 15904
-        do {
-            let listener = try NWListener(using: .udp, on: NWEndpoint.Port(rawValue: testPort)!)
-            var ready = false
-            listener.stateUpdateHandler = { state in
-                if case .ready = state { ready = true }
-            }
-            listener.start(queue: DispatchQueue(label: "test.udp"))
-            
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            listener.cancel()
-            
-            if ready {
-                return (true, "Successfully bound UDP on port \(testPort)")
-            }
-            return (false, "UDP listener did not reach ready state on port \(testPort)")
-        } catch {
-            return (false, "Cannot bind UDP port \(testPort): \(error.localizedDescription)")
-        }
+        await testPortBind(label: "UDP", params: .udp, port: 15904)
     }
     
     func testTCPPortBind() async -> (Bool, String) {
-        let testPort: UInt16 = 15902
+        await testPortBind(label: "TCP", params: .tcp, port: 15902)
+    }
+    
+    private func testPortBind(label: String, params: NWParameters, port: UInt16) async -> (Bool, String) {
         do {
-            let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: testPort)!)
-            var ready = false
-            listener.stateUpdateHandler = { state in
-                if case .ready = state { ready = true }
-            }
-            listener.start(queue: DispatchQueue(label: "test.tcp"))
+            let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
             
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<NWListener.State, Never>) in
+                var resumed = false
+                listener.stateUpdateHandler = { state in
+                    guard !resumed else { return }
+                    switch state {
+                    case .ready, .failed, .cancelled:
+                        resumed = true
+                        continuation.resume(returning: state)
+                    default:
+                        break
+                    }
+                }
+                listener.start(queue: DispatchQueue(label: "test.\(label.lowercased()).bind"))
+                
+                // Timeout after 5 seconds
+                DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+                    guard !resumed else { return }
+                    resumed = true
+                    continuation.resume(returning: .cancelled)
+                }
+            }
+            
             listener.cancel()
             
-            if ready {
-                return (true, "Successfully bound TCP on port \(testPort)")
+            if case .ready = result {
+                return (true, "Successfully bound \(label) on port \(port)")
             }
-            return (false, "TCP listener did not reach ready state on port \(testPort)")
+            return (false, "\(label) listener reached state \(result) instead of ready on port \(port)")
         } catch {
-            return (false, "Cannot bind TCP port \(testPort): \(error.localizedDescription)")
+            return (false, "Cannot bind \(label) port \(port): \(error.localizedDescription)")
         }
     }
     
