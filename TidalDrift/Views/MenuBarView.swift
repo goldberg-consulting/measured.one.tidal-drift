@@ -375,7 +375,7 @@ struct MenuBarDeviceRow: View {
     let device: DiscoveredDevice
     @ObservedObject private var localCast = LocalCastService.shared
     @State private var isHovering = false
-    @State private var showPINEntry = false
+    @State private var showAppStreamError = false
     
     private var showLocalCast: Bool {
         device.services.contains(.localCast) || device.isTidalDriftPeer
@@ -414,14 +414,14 @@ struct MenuBarDeviceRow: View {
                 // Inline quick-action buttons (visible on hover)
                 if isHovering {
                     HStack(spacing: 4) {
-                        if showLocalCast {
-                            QuickActionIcon(icon: "bolt.fill", color: .yellow, tooltip: "LocalCast") {
-                                startLocalCast()
-                            }
+                        QuickActionIcon(icon: "display", color: .blue, tooltip: "Screen Share (VNC)") {
+                            Task { try? await ScreenShareConnectionService.shared.connect(to: device) }
                         }
                         
-                        QuickActionIcon(icon: "display", color: .blue, tooltip: "Screen Share") {
-                            Task { try? await ScreenShareConnectionService.shared.connect(to: device) }
+                        if showLocalCast {
+                            QuickActionIcon(icon: "app.connected.to.app.below.fill", color: .purple, tooltip: "Stream App") {
+                                startAppStreaming()
+                            }
                         }
                         
                         QuickActionIcon(icon: "folder", color: .orange, tooltip: "File Share") {
@@ -464,35 +464,25 @@ struct MenuBarDeviceRow: View {
                 withAnimation(.easeInOut(duration: 0.15)) { isHovering = hovering }
             }
         }
-        .sheet(isPresented: $showPINEntry) {
-            LocalCastPINEntryView(
-                deviceName: device.name,
-                savedPassword: savedDevicePassword,
-                onConnect: { password in
-                    showPINEntry = false
-                    connectLocalCast(password: password)
-                },
-                onCancel: { showPINEntry = false }
-            )
+        .alert("App Streaming Unavailable", isPresented: $showAppStreamError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Could not connect to the remote TidalDrift control channel. Make sure TidalDrift is running on the remote Mac with LocalCast hosting enabled.")
         }
     }
     
-    private func startLocalCast() {
-        if let password = savedDevicePassword {
-            connectLocalCast(password: password)
-        } else {
-            showPINEntry = true
-        }
-    }
-    
-    private func connectLocalCast(password: String?) {
+    private func startAppStreaming() {
+        let password = savedDevicePassword
         Task {
             do {
-                let viewer = try await LocalCastService.shared.connect(to: device, password: password)
-                await MainActor.run { viewer.showWindow(nil) }
+                let controller = try await LocalCastService.shared.connectSystemScreenShare(to: device, password: password)
+                await MainActor.run {
+                    NSApp.activate(ignoringOtherApps: true)
+                    controller.showWindow(nil)
+                }
             } catch {
-                print("MenuBar LocalCast failed: \(error)")
-                Task { try? await ScreenShareConnectionService.shared.connect(to: device) }
+                print("MenuBar App Streaming control channel failed: \(error)")
+                await MainActor.run { showAppStreamError = true }
             }
         }
     }

@@ -5,7 +5,9 @@ import OSLog
 import Network
 import ScreenCaptureKit
 
-/// Capture target for hosting - full display or specific window/app
+/// Capture target for hosting.
+/// In the TidalCast architecture, full-desktop sharing uses VNC (Tier 1);
+/// this enum drives Tier 2 (app/window streaming via ScreenCaptureKit).
 enum HostCaptureTarget {
     case fullDisplay
     case window(CGWindowID, title: String)

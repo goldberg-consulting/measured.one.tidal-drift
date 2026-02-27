@@ -1,15 +1,28 @@
-# LocalCast -- Low-Latency Screen Streaming for macOS
+# TidalCast -- Screen & App Streaming for macOS
 
-LocalCast is TidalDrift's custom screen-streaming engine. It replaces VNC for
-LAN scenarios where you want sub-frame latency, app-level streaming, and
-remote input -- all without leaving the TidalDrift UI.
+TidalCast is TidalDrift's streaming engine with a two-tier architecture:
 
-## Why we built it
+## Tier 1: Full Desktop (VNC)
 
-VNC works, but it's slow. Even on a gigabit LAN you feel the lag -- mouse
-trails, blurry text, dropped frames. macOS has all the building blocks for
-something much better (ScreenCaptureKit, VideoToolbox, Metal), but nobody
-wires them together for a simple peer-to-peer experience. So we did.
+Full-desktop sharing uses **macOS built-in Screen Sharing** (`vnc://`).
+Apple handles encoding, compression, input forwarding, clipboard sync,
+and authentication natively. No custom code needed -- we just open the URL.
+
+## Tier 2: App/Window Streaming (this code)
+
+For streaming a **single app or window** as a native-looking client window,
+TidalCast uses a custom pipeline built on Apple's low-level frameworks.
+The client picks an app from the host's window list, the host captures
+just that window via ScreenCaptureKit, encodes it with VideoToolbox, and
+sends it over UDP. The client decodes and renders in a Metal-backed NSWindow.
+
+## Why the custom pipeline exists
+
+VNC shares the entire desktop. When you want to treat a remote app as if
+it were running locally -- its own window, its own title bar, input scoped
+to that window -- you need per-window capture and rendering. macOS has all
+the building blocks (ScreenCaptureKit, VideoToolbox, Metal) but doesn't
+expose per-window VNC. So TidalCast wires them together.
 
 ## Architecture
 
