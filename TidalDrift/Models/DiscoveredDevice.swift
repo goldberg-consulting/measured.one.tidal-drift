@@ -107,9 +107,17 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
         }
     }
     
-    var isOnline: Bool {
-        Date().timeIntervalSince(lastSeen) < 60
-    }
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+    
+    /// Seconds since this device was last seen. Use this to avoid
+    /// creating multiple Date() objects across the status properties.
+    private var age: TimeInterval { Date().timeIntervalSince(lastSeen) }
+    
+    var isOnline: Bool { age < 60 }
     
     /// Check if this device is the current Mac (by IP address)
     var isCurrentDevice: Bool {
@@ -118,39 +126,29 @@ struct DiscoveredDevice: Identifiable, Codable, Hashable {
     }
     
     /// Device hasn't been seen in 24+ hours
-    var isStale: Bool {
-        Date().timeIntervalSince(lastSeen) > 24 * 60 * 60
-    }
+    var isStale: Bool { age > 24 * 60 * 60 }
     
     /// Device was seen in this session (within the last 5 minutes)
-    var isRecentlyConfirmed: Bool {
-        Date().timeIntervalSince(lastSeen) < 5 * 60
-    }
+    var isRecentlyConfirmed: Bool { age < 5 * 60 }
     
     var statusText: String {
         if isOnline {
             return "Online"
         } else {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .abbreviated
-            return "Last seen \(formatter.localizedString(for: lastSeen, relativeTo: Date()))"
+            return "Last seen \(Self.relativeFormatter.localizedString(for: lastSeen, relativeTo: Date()))"
         }
     }
     
     var lastSeenText: String {
-        let interval = Date().timeIntervalSince(lastSeen)
-        
+        let interval = age
         if interval < 60 {
             return "Just now"
-        } else if interval < 60 * 60 {
-            let mins = Int(interval / 60)
-            return "\(mins)m ago"
-        } else if interval < 24 * 60 * 60 {
-            let hours = Int(interval / 3600)
-            return "\(hours)h ago"
+        } else if interval < 3600 {
+            return "\(Int(interval / 60))m ago"
+        } else if interval < 86400 {
+            return "\(Int(interval / 3600))h ago"
         } else {
-            let days = Int(interval / 86400)
-            return "\(days)d ago"
+            return "\(Int(interval / 86400))d ago"
         }
     }
     

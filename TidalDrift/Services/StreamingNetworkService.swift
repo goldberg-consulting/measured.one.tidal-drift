@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Combine
+import OSLog
 
 /// Represents a remote app available for streaming from another machine
 struct RemoteStreamableApp: Identifiable, Hashable, Codable {
@@ -42,6 +43,7 @@ struct StreamingHost: Identifiable, Hashable {
 @MainActor
 class StreamingNetworkService: ObservableObject, @unchecked Sendable {
     static let shared = StreamingNetworkService()
+    private let logger = Logger(subsystem: "com.tidaldrift", category: "Streaming")
     
     // Bonjour service type for TidalDrift streaming
     private let serviceType = "_tidalstream._tcp"
@@ -69,24 +71,8 @@ class StreamingNetworkService: ObservableObject, @unchecked Sendable {
     
     private init() {}
     
-    // Debug logging to file
     nonisolated private func log(_ message: String) {
-        let logMessage = "[\(Date())] \(message)\n"
-        print(logMessage)
-        
-        // Also write to file for debugging
-        let logPath = "/tmp/tidaldrift_share.log"
-        if let data = logMessage.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: logPath) {
-                if let handle = FileHandle(forWritingAtPath: logPath) {
-                    handle.seekToEndOfFile()
-                    handle.write(data)
-                    handle.closeFile()
-                }
-            } else {
-                FileManager.default.createFile(atPath: logPath, contents: data)
-            }
-        }
+        logger.debug("\(message, privacy: .public)")
     }
     
     // MARK: - Hosting (Advertising your apps)
@@ -205,23 +191,18 @@ class StreamingNetworkService: ObservableObject, @unchecked Sendable {
     }
     
     nonisolated private func handleIncomingConnection(_ connection: NWConnection) {
-        connection.stateUpdateHandler = { [weak self] state in
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let connection = connection else { return }
             switch state {
             case .ready:
-                #if DEBUG
-                print("🎬 Incoming streaming connection ready")
-                #endif
-                // Handle requests for app info or streaming
                 self?.receiveData(on: connection)
             case .failed(let error):
-                #if DEBUG
-                print("🎬 Connection failed: \(error)")
-                #endif
+                self?.logger.warning("Incoming connection failed: \(error.localizedDescription)")
             default:
                 break
             }
         }
-        connection.start(queue: DispatchQueue(label: "com.tidaldrift.connection"))
+        connection.start(queue: queue)
     }
     
     nonisolated private func receiveData(on connection: NWConnection) {
@@ -373,16 +354,15 @@ class StreamingNetworkService: ObservableObject, @unchecked Sendable {
     private func resolveAndConnect(result: NWBrowser.Result, serviceName: String) {
         let connection = NWConnection(to: result.endpoint, using: .tcp)
         
-        connection.stateUpdateHandler = { [weak self] state in
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let connection = connection else { return }
             switch state {
             case .ready:
-                // Get the resolved IP address
                 if let endpoint = connection.currentPath?.remoteEndpoint,
                    case .hostPort(let host, let port) = endpoint {
                     let ipAddress = self?.extractIP(from: host) ?? "unknown"
                     
                     Task { @MainActor in
-                        // Parse TXT record for app info
                         if case .bonjour(let txtRecord) = result.metadata {
                             self?.processDiscoveredHost(
                                 name: serviceName,
@@ -394,11 +374,9 @@ class StreamingNetworkService: ObservableObject, @unchecked Sendable {
                     }
                 }
                 
-                // Request app list
                 let request = "LIST_APPS".data(using: .utf8)!
                 connection.send(content: request, completion: .contentProcessed { _ in })
                 
-                // Receive response
                 connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
                     if let data = data {
                         Task { @MainActor in
@@ -408,9 +386,7 @@ class StreamingNetworkService: ObservableObject, @unchecked Sendable {
                 }
                 
             case .failed(let error):
-                #if DEBUG
-                print("🔍 Failed to connect to \(serviceName): \(error)")
-                #endif
+                self?.logger.warning("Failed to connect to \(serviceName): \(error.localizedDescription)")
             default:
                 break
             }

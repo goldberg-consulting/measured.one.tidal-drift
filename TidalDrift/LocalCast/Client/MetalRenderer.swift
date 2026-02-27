@@ -25,6 +25,12 @@ class MetalRenderer: NSObject, MTKViewDelegate {
     // Track last drawable size so we recalculate vertices when it changes
     private var lastDrawableSize: CGSize = .zero
     
+    deinit {
+        if let cache = textureCache {
+            CVMetalTextureCacheFlush(cache, 0)
+        }
+    }
+    
     init(mtkView: MTKView) {
         self.mtkView = mtkView
         self.device = mtkView.device ?? MTLCreateSystemDefaultDevice()!

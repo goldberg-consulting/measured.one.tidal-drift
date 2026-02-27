@@ -43,6 +43,9 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     @Published var discoveredPeers: [String: PeerInfo] = [:] // keyed by IP
     @Published var isAdvertising = false
     
+    /// Tracks when each peer IP was last seen for stale-peer pruning.
+    private var peerLastSeen: [String: Date] = [:]
+    
     private var listener: NWListener?
     private var browser: NWBrowser?
     private let queue = DispatchQueue(label: "com.tidaldrift.peer.network", qos: .userInitiated)
@@ -53,8 +56,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     private var netServiceBrowser: NetServiceBrowser?
     
     private var telemetryTimer: Timer?
-    // UDP heartbeat disabled - requires special permissions
-    // private var udpHeartbeatTimer: Timer?
+    private var peerPruneTimer: Timer?
     
     private let serviceType = "_tidaldrift._tcp"
     private let dropServiceType = "_tidaldrop._tcp"
@@ -293,6 +295,18 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         } catch {
             Self.log("❌ Failed to start dns-sd browse: \(error)")
         }
+        
+        if peerPruneTimer == nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.peerPruneTimer = Timer.scheduledTimer(
+                    timeInterval: 60,
+                    target: self as Any,
+                    selector: #selector(self?.pruneStaleDiscoveredPeers),
+                    userInfo: nil,
+                    repeats: true
+                )
+            }
+        }
     }
     
     func stopDiscovery() {
@@ -311,7 +325,27 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         browseProcess = nil
         browseOutputPipe = nil
         
+        peerPruneTimer?.invalidate()
+        peerPruneTimer = nil
+        
         Self.log("Stopped discovery")
+    }
+    
+    /// Remove peers not refreshed in the last 5 minutes.
+    @objc private func pruneStaleDiscoveredPeers() {
+        let staleThreshold: TimeInterval = 5 * 60
+        let now = Date()
+        var pruned = 0
+        
+        for (ip, lastSeen) in peerLastSeen where now.timeIntervalSince(lastSeen) > staleThreshold {
+            discoveredPeers.removeValue(forKey: ip)
+            peerLastSeen.removeValue(forKey: ip)
+            pruned += 1
+        }
+        
+        if pruned > 0 {
+            Self.log("Pruned \(pruned) stale peer(s) from discoveredPeers")
+        }
     }
     
     private func parseBrowseOutput(_ output: String) {
@@ -633,9 +667,9 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             // (even for self - this ensures the red outline shows)
             self.notifyNetworkDiscovery(peer: peer)
             
-            // Only add to discoveredPeers list if not self
             if !isSelf {
                 self.discoveredPeers[actualIP] = peer
+                self.peerLastSeen[actualIP] = Date()
             }
             
             // Clean up TXT record cache (thread-safe)
@@ -748,6 +782,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         
         DispatchQueue.main.async {
             self.discoveredPeers[ip] = peer
+            self.peerLastSeen[ip] = Date()
             self.notifyNetworkDiscovery(peer: peer)
             Self.log("✅ Updated peer '\(name)' at \(ip)")
         }
@@ -980,6 +1015,7 @@ extension TidalDriftPeerService: NetServiceBrowserDelegate {
         
         DispatchQueue.main.async {
             self.discoveredPeers[ipAddress] = peer
+            self.peerLastSeen[ipAddress] = Date()
             self.notifyNetworkDiscovery(peer: peer)
         }
     }

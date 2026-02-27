@@ -19,6 +19,8 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
     private var pathMonitor: NWPathMonitor?
     private let queue = DispatchQueue(label: "com.tidaldrift.discovery", qos: .userInitiated)
     
+    private var publishDebounceWorkItem: DispatchWorkItem?
+    
     // Store active connections to prevent premature deallocation
     private var activeConnections: [UUID: NWConnection] = [:]
     private let connectionsLock = NSLock()
@@ -405,6 +407,12 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
         netServiceBrowser?.stop()
         netServiceBrowser = nil
         discoveredLocalCastServices.removeAll()
+        
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        
+        udpListener?.cancel()
+        udpListener = nil
     }
     
     func refreshScan() {
@@ -969,19 +977,25 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
         }
     }
     
+    /// Coalesces rapid device-cache mutations into a single sort + publish + save.
     private func updatePublishedDevices() {
-        deviceCacheLock.lock()
-        let devices = Array(deviceCache.values).sorted { a, b in
-            if a.isTidalDriftPeer != b.isTidalDriftPeer { return a.isTidalDriftPeer }
-            return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+        publishDebounceWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.deviceCacheLock.lock()
+            let devices = Array(self.deviceCache.values).sorted { a, b in
+                if a.isTidalDriftPeer != b.isTidalDriftPeer { return a.isTidalDriftPeer }
+                return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+            }
+            self.deviceCacheLock.unlock()
+            
+            DispatchQueue.main.async { [weak self] in
+                self?.discoveredDevices = devices
+                self?.saveDevices()
+            }
         }
-        deviceCacheLock.unlock()
-        
-        DispatchQueue.main.async {
-            self.discoveredDevices = devices
-            // Auto-save when devices change
-            self.saveDevices()
-        }
+        publishDebounceWorkItem = work
+        queue.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
     
     func addManualDevice(name: String, ipAddress: String, port: Int = 5900, services: Set<DiscoveredDevice.ServiceType> = [.screenSharing]) {

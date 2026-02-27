@@ -171,6 +171,8 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
     }
     
     /// Monitor connection progress and provide diagnostics.
+    private static let maxDiagnosticDuration: TimeInterval = 60
+    
     @MainActor
     private func startDiagnosticTimer() {
         diagnosticTimer?.invalidate()
@@ -179,26 +181,23 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             guard let startTime = self.connectionStartTime else { return }
             let elapsed = Date().timeIntervalSince(startTime)
             
-            // Already streaming — nothing to diagnose
-            if self.isConnected { 
+            if self.isConnected || elapsed > Self.maxDiagnosticDuration {
                 self.diagnosticTimer?.invalidate()
+                self.diagnosticTimer = nil
                 return
             }
             
             if self.heartbeatsReceived == 0 {
-                // No heartbeat responses at all
                 if elapsed > 6.0 {
                     self.connectionPhase = .firewallBlocked
                     self.connectionStatus = ConnectionPhase.firewallBlocked.rawValue
                     self.logger.warning("⚠️ No heartbeat responses after \(Int(elapsed))s — likely firewall issue on host")
                 }
-            } else if !self.isConnected {
-                // Heartbeats work but no video
+            } else {
                 if elapsed > 10.0 {
                     self.connectionPhase = .videoTimeout
                     self.connectionStatus = ConnectionPhase.videoTimeout.rawValue
                     self.logger.warning("⚠️ Heartbeats OK but no video after \(Int(elapsed))s")
-                    // Request another keyframe
                     self.requestKeyFrame()
                 }
             }
