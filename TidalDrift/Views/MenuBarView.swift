@@ -8,9 +8,16 @@ struct MenuBarView: View {
     @State private var isTogglingLocalCast = false
     @State private var showPermissionAlert = false
     @State private var permissionAlertMessage = ""
+    @State private var isEditingName = false
+    @State private var editingNameText = ""
     
     private var otherDevices: [DiscoveredDevice] {
         appState.discoveredDevices.filter { !$0.isCurrentDevice }
+    }
+    
+    private var localDisplayName: String {
+        let custom = appState.settings.tidalDriftDisplayName
+        return custom.isEmpty ? appState.computerName : custom
     }
     
     var body: some View {
@@ -46,9 +53,45 @@ struct MenuBarView: View {
                 .foregroundColor(.accentColor)
             
             VStack(alignment: .leading, spacing: 2) {
-                Text(appState.computerName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
+                if isEditingName {
+                    HStack(spacing: 4) {
+                        TextField("Display name", text: $editingNameText)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12))
+                            .frame(maxWidth: 160)
+                            .onSubmit { commitNameEdit() }
+                        Button(action: { commitNameEdit() }) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.plain)
+                        Button(action: { isEditingName = false }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } else {
+                    HStack(spacing: 4) {
+                        Text(localDisplayName)
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                        Button(action: {
+                            editingNameText = appState.settings.tidalDriftDisplayName.isEmpty
+                                ? appState.computerName
+                                : appState.settings.tidalDriftDisplayName
+                            isEditingName = true
+                        }) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Rename this Mac on the TidalDrift network")
+                    }
+                }
                 Text(appState.localIPAddress)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -62,6 +105,14 @@ struct MenuBarView: View {
                 StatusDot(on: appState.tidalDropListening, label: "Drop")
             }
         }
+    }
+    
+    private func commitNameEdit() {
+        let trimmed = editingNameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isDefault = trimmed.isEmpty || trimmed == appState.computerName
+        appState.settings.tidalDriftDisplayName = isDefault ? "" : trimmed
+        isEditingName = false
+        TidalDriftPeerService.shared.restartAdvertising()
     }
     
     // MARK: - LocalCast
@@ -345,12 +396,13 @@ struct MenuBarDeviceRow: View {
             HStack(spacing: 8) {
                 Image(systemName: device.deviceIcon)
                     .font(.system(size: 11))
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(device.isTidalDriftPeer ? .red : .accentColor)
                     .frame(width: 16)
                 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(device.name)
+                    Text(device.displayName)
                         .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(device.isTidalDriftPeer ? .red : .primary)
                         .lineLimit(1)
                     Text(device.ipAddress)
                         .font(.system(size: 9, design: .monospaced))

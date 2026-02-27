@@ -967,7 +967,10 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
     
     private func updatePublishedDevices() {
         deviceCacheLock.lock()
-        let devices = Array(deviceCache.values).sorted { $0.name < $1.name }
+        let devices = Array(deviceCache.values).sorted { a, b in
+            if a.isTidalDriftPeer != b.isTidalDriftPeer { return a.isTidalDriftPeer }
+            return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
+        }
         deviceCacheLock.unlock()
         
         DispatchQueue.main.async {
@@ -1036,6 +1039,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
                 device.peerMacOSVersion = peerInfo.macOSVersion
                 device.peerUserName = peerInfo.userName
                 device.peerUptimeHours = peerInfo.uptimeHours
+                device.peerTidalDriftName = peerInfo.tidalDriftName
                 
                 // Keep the most accurate IP
                 if !inputIP.isEmpty && inputIP != "Unknown" {
@@ -1044,7 +1048,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
                 
                 self.deviceCache[device.ipAddress] = device
                 self.deviceCacheLock.unlock()
-                print("🌊 TidalDrift PEER: ✅ Updated cache entry '\(device.name)' as peer")
+                print("🌊 TidalDrift PEER: ✅ Updated cache entry '\(device.displayName)' as peer")
             } else {
                 // Create a new device entry for this TidalDrift peer
                 let displayName = hostname.replacingOccurrences(of: ".local", with: "")
@@ -1062,7 +1066,8 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
                     peerMemoryGB: peerInfo.memoryGB,
                     peerMacOSVersion: peerInfo.macOSVersion,
                     peerUserName: peerInfo.userName,
-                    peerUptimeHours: peerInfo.uptimeHours
+                    peerUptimeHours: peerInfo.uptimeHours,
+                    peerTidalDriftName: peerInfo.tidalDriftName
                 )
                 self.deviceCache[newDevice.ipAddress] = newDevice
                 self.deviceCacheLock.unlock()
