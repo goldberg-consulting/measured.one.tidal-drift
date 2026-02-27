@@ -5,6 +5,25 @@ import AppKit
 import CoreGraphics
 import OSLog
 
+// MARK: - Architecture
+//
+// TidalCast uses a two-tier architecture:
+//
+// Tier 1 — Full Desktop (VNC):
+//   macOS built-in Screen Sharing via vnc:// handles full-desktop viewing.
+//   No custom video pipeline needed; Apple provides encoding, compression,
+//   input forwarding, clipboard sync, and authentication natively.
+//   Initiated by ScreenShareConnectionService.connect(to:).
+//
+// Tier 2 — App/Window Streaming (custom):
+//   Uses ScreenCaptureKit to capture a single window or app on the host,
+//   VideoToolbox H.264 encoding, UDP transport, Metal rendering on the client.
+//   The client sees the remote app in a native-feeling NSWindow.
+//   Initiated by connectSystemScreenShare(to:), which opens VNC for the
+//   desktop AND a control channel for app enumeration / targeted capture.
+//
+// The LocalCast transport (UDP + PacketProtocol) is retained for Tier 2 only.
+
 @MainActor
 protocol LocalCastServiceDelegate: AnyObject {
     func localCastDidStartHosting()
@@ -238,16 +257,21 @@ class LocalCastService: ObservableObject {
     private var activeControlPanels: [AppControlPanelController] = []
     
     /// Opens macOS Screen Sharing.app (VNC) for the video stream AND
-    /// establishes a TidalDrift control channel for remote app management.
-    /// Returns the floating App Control panel controller.
+    /// attempts to establish a TidalDrift control channel for remote app
+    /// management. VNC always opens; the App Control panel is shown only
+    /// if the control channel connects successfully.
     func connectSystemScreenShare(to device: DiscoveredDevice, password: String? = nil) async throws -> AppControlPanelController {
         logger.info("System Screen Share + App Control for \(device.name)")
         
-        // 1. Open macOS Screen Sharing.app via VNC
-        try await ScreenShareConnectionService.shared.connect(to: device)
-        logger.info("Opened Screen Sharing.app for \(device.name)")
+        // 1. Always open macOS Screen Sharing.app via VNC (Tier 1)
+        do {
+            try await ScreenShareConnectionService.shared.connect(to: device)
+            logger.info("Opened Screen Sharing.app for \(device.name)")
+        } catch {
+            logger.warning("VNC connection failed: \(error.localizedDescription)")
+        }
         
-        // 2. Establish a TidalDrift control channel (same auth flow as LocalCast)
+        // 2. Establish a TidalDrift control channel for app enumeration (Tier 2)
         var resolvedPassword = password
         if resolvedPassword == nil || resolvedPassword?.isEmpty == true {
             if let creds = try? KeychainService.shared.getCredential(for: device.stableId) {
