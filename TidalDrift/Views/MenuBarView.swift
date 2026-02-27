@@ -179,14 +179,18 @@ struct MenuBarView: View {
                     Spacer()
                 }
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
+                let rowHeight: CGFloat = 38
+                let listHeight = min(CGFloat(otherDevices.count) * rowHeight, 240)
+                
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(spacing: 2) {
                         ForEach(otherDevices) { device in
                             MenuBarDeviceRow(device: device)
                         }
                     }
                 }
-                .frame(maxHeight: 220)
+                .frame(height: listHeight)
+                .clipped()
             }
         }
     }

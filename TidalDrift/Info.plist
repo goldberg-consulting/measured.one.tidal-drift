@@ -49,6 +49,6 @@
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>LSUIElement</key>
-    <false/>
+    <true/>
 </dict>
 </plist>
