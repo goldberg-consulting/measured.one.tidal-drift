@@ -114,3 +114,6 @@ TidalDrift/TidalDrift\ *.app/
 **/build-xcode/
 **/dist/
 **/.build/
+
+# Cursor project metadata
+.cursor/
