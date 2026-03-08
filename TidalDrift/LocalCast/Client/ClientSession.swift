@@ -73,6 +73,18 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
     private var heartbeatsSent: Int = 0
     private var heartbeatsReceived: Int = 0
     
+    /// Timeout for app list request; cancelled when response received.
+    private var appListTimeoutWorkItem: DispatchWorkItem?
+    
+    /// True after an app list request timed out (control channel unreachable or host not responding).
+    @Published var appListLoadFailed: Bool = false
+    
+    /// True when timeout likely indicates host-side auth is required (not a blocked port).
+    @Published var appListAuthRequiredHint: Bool = false
+    
+    /// True when we received at least one app list response (even if empty). Lets UI distinguish "port blocked" from "host sent 0 apps".
+    @Published var appListResponseReceived: Bool = false
+    
     // MARK: - Auth
     
     /// Password for authentication. Nil = no auth required.
@@ -125,9 +137,10 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             self.connectionStatus = "Connecting to \(self.device.name)..."
         }
         
-        // Store the host endpoint with resolved address
-        hostEndpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(resolvedAddress), port: 5904)
-        logger.info("LocalCast: Host endpoint set to \(resolvedAddress):5904")
+        // Store the host endpoint with resolved address (port from config so it can be changed if blocked)
+        let port = NWEndpoint.Port(rawValue: LocalCastConfiguration.hostPort)!
+        hostEndpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(resolvedAddress), port: port)
+        logger.info("LocalCast: Host endpoint set to \(resolvedAddress):\(LocalCastConfiguration.hostPort)")
         
         // NOTE: We do NOT start a listener on the client side.
         // Video frames arrive on the OUTGOING connection we create when sending
@@ -393,12 +406,19 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
     
     // MARK: - Remote App Streaming
     
-    /// Request list of available apps from the host
+    private static let appListTimeoutSeconds: TimeInterval = 8
+    
+    /// Request list of available apps from the host. If no response within timeout, clears loading and sets appListLoadFailed.
     func requestAppList() {
         guard let endpoint = hostEndpoint else {
             print("❌ ClientSession: Cannot request app list - no host endpoint")
             return
         }
+        
+        appListTimeoutWorkItem?.cancel()
+        appListLoadFailed = false
+        appListAuthRequiredHint = false
+        // appListResponseReceived stays true so we can show "host sent 0 apps" vs "no response" until next request
         
         print("📋 ClientSession: Requesting app list from host...")
         
@@ -413,6 +433,25 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
             payload: Data()
         )
         transport.send(packet: packet, to: endpoint)
+        
+        let work = DispatchWorkItem { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.isLoadingApps {
+                    self.isLoadingApps = false
+                    let likelyAuthRequired = (self.device.localCastAuthRequired == true) && self.heartbeatsReceived == 0
+                    self.appListAuthRequiredHint = likelyAuthRequired
+                    self.appListLoadFailed = !likelyAuthRequired
+                    if likelyAuthRequired {
+                        self.logger.warning("App list request timed out — host likely requires LocalCast password")
+                    } else {
+                        self.logger.warning("App list request timed out — host may not have LocalCast on or port \(LocalCastConfiguration.hostPort) may be blocked")
+                    }
+                }
+            }
+        }
+        appListTimeoutWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.appListTimeoutSeconds, execute: work)
     }
     
     /// Request to stream a specific window
@@ -690,8 +729,14 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
     }
     
     private func handleAppListResponse(_ payload: Data) {
+        appListTimeoutWorkItem?.cancel()
+        appListTimeoutWorkItem = nil
+        
         guard payload.count < 512_000 else {
             print("❌ ClientSession: App list payload too large (\(payload.count) bytes), ignoring")
+            DispatchQueue.main.async { [weak self] in
+                self?.isLoadingApps = false
+            }
             return
         }
         do {
@@ -702,12 +747,17 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
                 guard let self else { return }
                 self.remoteApps = apps
                 self.isLoadingApps = false
+                self.appListLoadFailed = false
+                self.appListAuthRequiredHint = false
+                self.appListResponseReceived = true
                 self.delegate?.clientSession(self, didReceiveAppList: apps)
             }
         } catch {
             print("❌ ClientSession: Failed to decode app list: \(error)")
             DispatchQueue.main.async { [weak self] in
                 self?.isLoadingApps = false
+                self?.appListAuthRequiredHint = false
+                self?.appListResponseReceived = true
             }
         }
     }

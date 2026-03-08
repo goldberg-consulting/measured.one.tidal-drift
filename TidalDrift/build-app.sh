@@ -5,7 +5,7 @@
 # Requires: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
 set -e
-VERSION="1.4.1"
+VERSION="1.4.3"
 APP_NAME="TidalDrift"
 BUNDLE_ID="com.goldbergconsulting.tidaldrift"
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'

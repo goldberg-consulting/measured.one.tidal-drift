@@ -9,7 +9,7 @@ extension DiscoveredDevice {
     
     /// The LocalCast-specific endpoint (if available)
     var localCastEndpoint: NWEndpoint? {
-        NWEndpoint.hostPort(host: NWEndpoint.Host(ipAddress), port: NWEndpoint.Port(rawValue: 5904)!)
+        NWEndpoint.hostPort(host: NWEndpoint.Host(ipAddress), port: NWEndpoint.Port(rawValue: LocalCastConfiguration.hostPort)!)
     }
 }
 

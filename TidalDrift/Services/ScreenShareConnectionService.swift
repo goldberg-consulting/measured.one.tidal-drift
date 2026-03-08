@@ -100,18 +100,11 @@ class ScreenShareConnectionService: @unchecked Sendable {
            let password = password, !password.isEmpty {
             try await connectWithCredentials(to: resolved.address, port: resolved.port, username: username, password: password)
         } else {
-            // Build VNC URL - prefer hostname.local if available for continued mDNS resolution
-            let connectionAddress: String
-            if let hostname = resolved.hostname, resolved.method == .mDNSHostname {
-                // Use the .local hostname for the VNC URL - this allows Screen Sharing
-                // to benefit from continued mDNS resolution during the session
-                let cleanHost = hostname.hasSuffix(".local") ? hostname : "\(hostname).local"
-                connectionAddress = cleanHost
-                logger.info("🔌 Using hostname for VNC URL: \(cleanHost)")
-            } else {
-                connectionAddress = resolved.address
-                logger.info("🔌 Using IP for VNC URL: \(resolved.address)")
-            }
+            // Always use the resolved IP for the VNC URL. Using a .local hostname
+            // re-introduces mDNS ambiguity (two Macs with similar names can cause
+            // Screen Sharing to connect to the local machine instead of the remote).
+            let connectionAddress = resolved.address
+            logger.info("🔌 Using resolved IP for VNC URL: \(resolved.address)")
             
             let urlString: String
             if let username = username, !username.isEmpty {

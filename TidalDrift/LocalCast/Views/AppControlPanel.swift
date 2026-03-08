@@ -88,9 +88,14 @@ struct AppControlPanelView: View {
             
             Divider()
             
-            // Connection status
+            // Connection status (with clear message when control channel is blocked)
             if !session.isConnected && session.connectionPhase != .streaming {
                 connectionStatus
+            }
+            
+            // Blocked / port unreachable hint when we know the control channel failed
+            if session.appListLoadFailed || session.appListAuthRequiredHint || session.connectionPhase == .firewallBlocked || session.connectionPhase == .noRoute {
+                controlChannelUnavailableView
             }
             
             // App list
@@ -122,6 +127,7 @@ struct AppControlPanelView: View {
                     Text(deviceName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    port5904StatusLine
                 }
                 
                 Spacer()
@@ -179,6 +185,36 @@ struct AppControlPanelView: View {
         .padding()
     }
     
+    /// One-line status so you can see at a glance if port 5904 is blocked.
+    private var port5904StatusLine: some View {
+        HStack(spacing: 4) {
+            Text("Port \(LocalCastConfiguration.hostPort):")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            if session.isLoadingApps {
+                Text("checking…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if session.appListLoadFailed {
+                Text("not reachable")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            } else if session.appListAuthRequiredHint {
+                Text("auth required")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            } else if session.appListResponseReceived {
+                Text("reachable")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            } else {
+                Text("—")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+    
     private var connectionStatus: some View {
         HStack(spacing: 8) {
             ProgressView()
@@ -188,6 +224,35 @@ struct AppControlPanelView: View {
                 .foregroundStyle(.secondary)
         }
         .padding()
+    }
+    
+    /// Shown when the LocalCast control channel is unreachable (port blocked or host not running LocalCast).
+    private var controlChannelUnavailableView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Control channel unreachable")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+            }
+            if session.appListAuthRequiredHint {
+                Text("Host requires a LocalCast password. Enter/save the host password, then retry App Control.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("App list and focus require LocalCast on the **host** Mac. Ensure the host has LocalCast turned on and that port \(LocalCastConfiguration.hostPort) is not blocked by a firewall.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.08)))
+        .padding(.horizontal)
+        .padding(.bottom, 4)
     }
     
     private var loadingView: some View {
@@ -209,6 +274,21 @@ struct AppControlPanelView: View {
             Text("No apps found")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            Group {
+                if session.appListAuthRequiredHint {
+                    Text("Host likely requires a LocalCast password. Save the host password and retry.")
+                } else if session.appListLoadFailed {
+                    Text("No response from host. Port \(LocalCastConfiguration.hostPort) may be blocked by a firewall, or the **host** Mac doesn’t have LocalCast turned on.")
+                } else if session.appListResponseReceived {
+                    Text("Host sent 0 apps. On the **host** Mac, enable **Screen Recording** for TidalDrift (System Settings → Privacy & Security) so it can list apps.")
+                } else {
+                    Text("App list requires LocalCast on the host Mac.")
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal)
             Button("Refresh") {
                 session.requestAppList()
             }

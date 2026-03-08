@@ -66,7 +66,9 @@ struct LocalCastConfiguration: Codable {
     
     static let `default` = LocalCastConfiguration()
     
-    /// Default UDP port used by LocalCast host sessions.
+    /// UDP port for the LocalCast control channel (app list, focus, isolate, stream requests).
+    /// Host listens here; client connects here. If your firewall blocks 5904, change this and ensure
+    /// both host and client use the same port (e.g. via a build-time constant or settings).
     static let hostPort: UInt16 = 5904
 }
 

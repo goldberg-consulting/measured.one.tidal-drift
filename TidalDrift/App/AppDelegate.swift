@@ -5,6 +5,7 @@ import UserNotifications
 class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSWindowDelegate {
     
     private var onboardingWindow: NSWindow?
+    private var settingsWindow: NSWindow?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAppearance()
@@ -109,9 +110,54 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         onboardingWindow = window
     }
     
+    // MARK: - Settings Window
+    
+    /// Responder-chain target used by MenuBarView via `NSApp.sendAction`.
+    @objc func showSettingsWindow(_ sender: Any?) {
+        showSettings()
+    }
+    
+    /// Legacy alias used on older macOS selectors.
+    @objc func showPreferencesWindow(_ sender: Any?) {
+        showSettings()
+    }
+    
+    private func showSettings() {
+        if let existing = settingsWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        
+        let settingsView = SettingsView()
+            .environmentObject(AppState.shared)
+        
+        let hostingView = NSHostingView(rootView: settingsView)
+        
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Settings"
+        window.contentView = hostingView
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.makeKeyAndOrderFront(nil)
+        
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow = window
+    }
+    
     func windowWillClose(_ notification: Notification) {
-        if let window = notification.object as? NSWindow, window === onboardingWindow {
-            onboardingWindow = nil
+        if let window = notification.object as? NSWindow {
+            if window === onboardingWindow {
+                onboardingWindow = nil
+            } else if window === settingsWindow {
+                settingsWindow = nil
+            }
         }
     }
     

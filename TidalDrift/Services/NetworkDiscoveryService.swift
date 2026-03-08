@@ -325,7 +325,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
                         
                         // Try to match by name and resolve
                         DispatchQueue.main.async { [weak self] in
-                            self?.markDeviceAsLocalCastHost(name: instanceName)
+                            self?.markDeviceAsLocalCastHost(name: instanceName, authRequired: nil)
                         }
                         
                         // Also resolve via dns-sd -L
@@ -360,7 +360,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
                         hostname = hostname.replacingOccurrences(of: ".local.", with: "")
                         
                         self.logger.info("🌊 dns-sd resolved '\(name)' to hostname: \(hostname)")
-                        self.resolveHostnameAndMarkLocalCast(hostname, originalName: name)
+                        self.resolveHostnameAndMarkLocalCast(hostname, originalName: name, authRequired: nil)
                     }
                 }
             }
@@ -510,7 +510,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
         logger.info("🌊 Resolving LocalCast: '\(name)'")
         
         // First try to match by name to existing devices
-        markDeviceAsLocalCastHost(name: name)
+        markDeviceAsLocalCastHost(name: name, authRequired: nil)
         
         // Also resolve via dns-sd to get the IP directly
         queue.async { [weak self] in
@@ -521,6 +521,9 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
             let safeType2 = type.replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\\", with: "")
             let safeDomain = domain.replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\\", with: "")
             let result = ShellExecutor.execute("timeout 3 dns-sd -L '\(safeName)' '\(safeType2)' '\(safeDomain)' 2>&1 | head -10")
+            let authRequired: Bool? =
+                result.output.contains("auth=1") ? true :
+                (result.output.contains("auth=0") ? false : nil)
             
             // Parse output for host info - look for "can be reached at" or hostname
             let lines = result.output.split(separator: "\n")
@@ -536,7 +539,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
                         self.logger.info("🌊 LocalCast hostname: \(hostname)")
                         
                         // Resolve hostname to IP
-                        self.resolveHostnameAndMarkLocalCast(hostname, originalName: name)
+                        self.resolveHostnameAndMarkLocalCast(hostname, originalName: name, authRequired: authRequired)
                     }
                 }
             }
@@ -544,7 +547,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
     }
     
     /// Resolve hostname to IP and mark device as LocalCast host
-    private func resolveHostnameAndMarkLocalCast(_ hostname: String, originalName: String) {
+    private func resolveHostnameAndMarkLocalCast(_ hostname: String, originalName: String, authRequired: Bool?) {
         let cleanHostname = hostname.hasSuffix(".local") ? hostname : "\(hostname).local"
         
         var hints = addrinfo()
@@ -570,20 +573,23 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
         
         // Mark device at this IP as LocalCast host
         DispatchQueue.main.async { [weak self] in
-            self?.addLocalCastToDevice(ipAddress: ipAddress, name: originalName)
+            self?.addLocalCastToDevice(ipAddress: ipAddress, name: originalName, authRequired: authRequired)
         }
     }
     
     /// Add LocalCast service to a device by IP address
-    private func addLocalCastToDevice(ipAddress: String, name: String) {
+    private func addLocalCastToDevice(ipAddress: String, name: String, authRequired: Bool?) {
         deviceCacheLock.lock()
         
         if var device = deviceCache[ipAddress] {
             if !device.services.contains(.localCast) {
                 device.services.insert(.localCast)
-                deviceCache[ipAddress] = device
-                logger.info("🌊 ✅ Added LocalCast to existing device: \(device.name) at \(ipAddress)")
             }
+            if let authRequired {
+                device.localCastAuthRequired = authRequired
+            }
+            deviceCache[ipAddress] = device
+            logger.info("🌊 ✅ Added/updated LocalCast on existing device: \(device.name) at \(ipAddress), auth=\(authRequired.map(String.init(describing:)) ?? "unknown")")
         } else {
             // Create new device entry for this LocalCast host
             let displayName = name.replacingOccurrences(of: "-", with: " ")
@@ -592,10 +598,11 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
                 hostname: "\(name).local",
                 ipAddress: ipAddress,
                 services: [.localCast],
-                lastSeen: Date()
+                lastSeen: Date(),
+                localCastAuthRequired: authRequired
             )
             deviceCache[ipAddress] = newDevice
-            logger.info("🌊 ✅ Created new LocalCast device: \(displayName) at \(ipAddress)")
+            logger.info("🌊 ✅ Created new LocalCast device: \(displayName) at \(ipAddress), auth=\(authRequired.map(String.init(describing:)) ?? "unknown")")
         }
         
         deviceCacheLock.unlock()
@@ -617,7 +624,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
     }
     
     /// Mark a device as supporting LocalCast based on its advertised name
-    private func markDeviceAsLocalCastHost(name: String) {
+    private func markDeviceAsLocalCastHost(name: String, authRequired: Bool?) {
         let normalizedName = normalizeName(name)
         
         deviceCacheLock.lock()
@@ -648,9 +655,12 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
             if isMatch {
                 if !device.services.contains(.localCast) {
                     device.services.insert(.localCast)
-                    deviceCache[ip] = device
-                    logger.info("🌊 ✅ Marked '\(device.name)' at \(ip) as LocalCast host (name match)")
                 }
+                if let authRequired {
+                    device.localCastAuthRequired = authRequired
+                }
+                deviceCache[ip] = device
+                logger.info("🌊 ✅ Marked '\(device.name)' at \(ip) as LocalCast host (name match), auth=\(authRequired.map(String.init(describing:)) ?? "unknown")")
                 foundMatch = true
             }
         }
@@ -1423,7 +1433,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
         service.resolve(withTimeout: 10.0)
         
         // Also try to match by name immediately
-        markDeviceAsLocalCastHost(name: service.name)
+        markDeviceAsLocalCastHost(name: service.name, authRequired: nil)
     }
     
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
@@ -1445,7 +1455,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
                     logger.info("🌊 NetService: LocalCast '\(sender.name)' at IP: \(ipAddress)")
                     
                     DispatchQueue.main.async { [weak self] in
-                        self?.addLocalCastToDevice(ipAddress: ipAddress, name: sender.name)
+                        self?.addLocalCastToDevice(ipAddress: ipAddress, name: sender.name, authRequired: nil)
                     }
                 }
             }
@@ -1453,7 +1463,7 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
         
         // Also try hostname resolution
         if let hostname = sender.hostName?.replacingOccurrences(of: ".local.", with: "") {
-            resolveHostnameAndMarkLocalCast(hostname, originalName: sender.name)
+            resolveHostnameAndMarkLocalCast(hostname, originalName: sender.name, authRequired: nil)
         }
     }
     

@@ -299,10 +299,16 @@ struct MenuBarView: View {
             
             MenuBarActionButton(icon: "gearshape", label: "Settings...") {
                 NSApp.activate(ignoringOtherApps: true)
+                let didSend: Bool
                 if #available(macOS 14.0, *) {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    didSend = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
                 } else {
-                    NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+                    didSend = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+                }
+                
+                // Fallback: call AppDelegate directly if responder chain did not handle it.
+                if !didSend, let delegate = NSApp.delegate as? AppDelegate {
+                    delegate.showSettingsWindow(nil)
                 }
             }
             

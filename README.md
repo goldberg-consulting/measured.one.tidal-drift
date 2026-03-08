@@ -61,7 +61,7 @@ This requires:
 - Xcode selected: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
 - A Developer ID certificate in your Keychain (falls back to ad-hoc signing if unavailable)
 
-### Release Build
+### Release Build (signed + notarized)
 
 ```bash
 cd TidalDrift
@@ -69,7 +69,13 @@ chmod +x build-release.sh
 ./build-release.sh
 ```
 
-The release build adds hardened runtime, notarization, and stapling. Requires a `.env` file with your Apple notarization credentials (see `.env.example`).
+The release build adds hardened runtime, notarization via Apple's notary service, and ticket stapling. It requires a `.env` file -- see [Configuration](#configuration) below.
+
+To skip notarization (sign only):
+
+```bash
+./build-release.sh --skip-notarize
+```
 
 ### Swift Package Manager
 
@@ -120,11 +126,40 @@ TidalDrift/
 
 ## Configuration
 
-Copy the example environment file if you plan to notarize releases:
+### Notarization credentials (`TidalDrift/.env`)
+
+The release build script sources `TidalDrift/.env` for Apple notarization credentials. This file is gitignored and must never be committed.
 
 ```bash
 cp TidalDrift/.env.example TidalDrift/.env
-# Edit with your Apple ID, Team ID, and app-specific password
+```
+
+Then edit `TidalDrift/.env` with your values:
+
+| Variable | Description | Where to get it |
+|---|---|---|
+| `APPLE_ID` | Your Apple Developer account email | [developer.apple.com](https://developer.apple.com) |
+| `TEAM_ID` | Your 10-character Apple Developer Team ID | Xcode > Settings > Accounts > Team ID, or [Membership](https://developer.apple.com/account#MembershipDetailsCard) |
+| `APP_SPECIFIC_PASSWORD` | An app-specific password for notarytool | [appleid.apple.com](https://appleid.apple.com) > Sign-In and Security > App-Specific Passwords |
+| `NOTARY_PROFILE` | Keychain profile name (default: `notarytool-profile`) | Auto-created by the build script on first run |
+
+On the first notarization run, the script stores these credentials in your login keychain under the profile name so subsequent runs don't need the plaintext values. You can also store them manually:
+
+```bash
+xcrun notarytool store-credentials "notarytool-profile" \
+  --apple-id "you@example.com" \
+  --team-id "XXXXXXXXXX" \
+  --password "xxxx-xxxx-xxxx-xxxx"
+```
+
+### Developer ID certificate
+
+Both build scripts require a **Developer ID Application** certificate in your Keychain. The dev build (`build-app.sh`) falls back to ad-hoc signing if none is found; the release build (`build-release.sh`) will exit with an error.
+
+Verify your certificate is installed:
+
+```bash
+security find-identity -v -p codesigning | grep "Developer ID Application"
 ```
 
 ## Running Tests

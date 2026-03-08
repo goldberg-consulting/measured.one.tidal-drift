@@ -124,8 +124,8 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         
         // Start UDP transport first
         do {
-            try transport.startListening(port: 5904)
-            logger.info("✅ UDP transport listening on port 5904")
+            try transport.startListening(port: LocalCastConfiguration.hostPort)
+            logger.info("✅ UDP transport listening on port \(LocalCastConfiguration.hostPort)")
         } catch {
             logger.error("❌ Failed to start UDP transport: \(error.localizedDescription)")
             throw error
@@ -156,7 +156,7 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
         }
         
         isRunning = true
-        logger.info("✅ Host session started successfully - listening on port 5904")
+        logger.info("✅ Host session started successfully - listening on port \(LocalCastConfiguration.hostPort)")
     }
     
     /// Update the input injector with the current capture bounds
@@ -621,7 +621,17 @@ class HostSession: ScreenCaptureManagerDelegate, VideoEncoderDelegate, UDPTransp
             print("📋 HostSession: Sent app list to client (\(payload.count) bytes)")
             
         } catch {
+            logger.warning("Failed to get app list: \(error.localizedDescription) — sending empty list so client can stop loading")
             print("❌ HostSession: Failed to get app list: \(error)")
+            // Always send a response so the client can clear isLoadingApps (e.g. Screen Recording denied on host)
+            let emptyPayload = (try? JSONEncoder().encode([RemoteAppInfo]())) ?? Data()
+            let packet = LocalCastPacket(
+                type: .appListResponse,
+                sequenceNumber: 0,
+                timestamp: CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970,
+                payload: emptyPayload
+            )
+            transport.send(packet: packet, to: endpoint)
         }
     }
     

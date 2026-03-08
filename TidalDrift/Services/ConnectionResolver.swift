@@ -217,6 +217,11 @@ actor ConnectionResolver {
         let ip = device.ipAddress
         guard !ip.isEmpty, ip != "Unknown", ip != "Resolving..." else { return nil }
         
+        if let localIP = NetworkUtils.getLocalIPAddress(), ip == localIP {
+            logger.warning("⚠️ Cached IP \(ip) is our own IP — skipping to avoid self-connection")
+            return nil
+        }
+        
         logger.debug("🔍 Verifying cached IP: \(ip):\(device.port)")
         
         // Quick connectivity test
@@ -289,6 +294,14 @@ actor ConnectionResolver {
             
             let ip = String(cString: ipBuffer)
             if !ip.isEmpty && ip != "0.0.0.0" {
+                // Guard: reject if the hostname resolved to our own IP.
+                // This happens when two Macs share a similar default hostname
+                // and mDNS resolves the ambiguous name to the local machine.
+                if let localIP = NetworkUtils.getLocalIPAddress(), ip == localIP {
+                    logger.warning("⚠️ Hostname \(hostname) resolved to local IP \(ip) — skipping to avoid self-connection")
+                    return nil
+                }
+                
                 logger.debug("✅ Resolved \(hostname) -> \(ip)")
                 
                 return ResolvedAddress(
