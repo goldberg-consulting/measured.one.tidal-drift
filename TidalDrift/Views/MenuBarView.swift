@@ -384,7 +384,7 @@ struct MenuBarDeviceRow: View {
     @State private var showAppStreamError = false
     
     private var showLocalCast: Bool {
-        device.services.contains(.localCast) || device.isTidalDriftPeer
+        device.services.contains(.localCast)
     }
     private var showSSH: Bool {
         device.services.contains(.ssh) || device.isTidalDriftPeer

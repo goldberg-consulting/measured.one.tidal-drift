@@ -273,6 +273,14 @@ class LocalCastService: ObservableObject {
             logger.warning("VNC connection failed: \(error.localizedDescription)")
         }
         
+        // If the host is not advertising LocalCast, fail fast with a clear
+        // message instead of timing out and implying a firewall block.
+        guard device.supportsLocalCast else {
+            let reason = "Remote Mac is not advertising LocalCast on port \(LocalCastConfiguration.hostPort). Enable LocalCast Hosting on the host Mac first."
+            logger.warning("App Control unavailable for \(device.name): \(reason)")
+            throw LocalCastError.connectionFailed(reason)
+        }
+        
         // 2. Establish a TidalDrift control channel for app enumeration (Tier 2)
         var resolvedPassword = password
         if resolvedPassword == nil || resolvedPassword?.isEmpty == true {

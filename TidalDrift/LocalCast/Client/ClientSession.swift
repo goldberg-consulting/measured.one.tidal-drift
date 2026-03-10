@@ -439,7 +439,11 @@ class ClientSession: ObservableObject, UDPTransportDelegate, VideoDecoderDelegat
                 guard let self else { return }
                 if self.isLoadingApps {
                     self.isLoadingApps = false
-                    let likelyAuthRequired = (self.device.localCastAuthRequired == true) && self.heartbeatsReceived == 0
+                    let hasPassword = !(self.password?.isEmpty ?? true)
+                    let localCastAdvertised = self.device.supportsLocalCast
+                    let likelyAuthRequired =
+                        (self.device.localCastAuthRequired == true) ||
+                        (localCastAdvertised && !hasPassword && self.heartbeatsReceived == 0)
                     self.appListAuthRequiredHint = likelyAuthRequired
                     self.appListLoadFailed = !likelyAuthRequired
                     if likelyAuthRequired {
