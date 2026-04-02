@@ -1,167 +1,171 @@
-# TidalDrift v1.4 — LocalCast Gets Real
+# Release History
 
-99 commits. 15 version bumps. 4 logo redesigns. Two complete re-implementations of the UDP heartbeat system. A memory corruption arc that spanned five straight patch releases. A brief identity crisis where the app was called "Neural Bridge"... what was I thinking? And somewhere around v1.3.43, I decided VNC was too slow and built an entire screen streaming engine from scratch using nothing but Apple frameworks.
+## v1.4.3: Open-Source Release
 
-This is that release.
+**Date:** April 2026
+**Tag:** `v1.4.3`
+**Commits:** 127
 
----
+This is the first public release of TidalDrift as an open-source project under the MIT License.
 
-## LocalCast — the headline
+The release represents 127 commits across roughly 18 months of development, encompassing a menu-bar-first redesign, a custom screen streaming engine (LocalCast), two complete security audits, and the infrastructure required for open-source collaboration: CI, linting, branch protection, and updated documentation.
 
-LocalCast replaces VNC for LAN streaming. ScreenCaptureKit for capture, VideoToolbox for H.264/HEVC encoding, Metal for rendering, raw UDP for transport. The whole pipeline runs in-process — no ffmpeg, no GStreamer, no external daemons. Sub-frame latency on a gigabit LAN.
+### What works
 
-The thing I'm most excited about is app streaming. You can stream a single app from another Mac and use it like it's running natively on yours — its own window, full input, resizable. Open Xcode on your Mac Studio from your laptop on the couch. Run a build on a remote machine and watch it in real time. Pair on code without screen sharing your entire desktop. It's the feature that made me realize this wasn't just a VNC replacement. 
+| Feature | Status | Notes |
+|---|---|---|
+| Menu-bar command center | Stable | Primary UI; all device actions accessible from the popover |
+| Bonjour/mDNS network discovery | Stable | Discovers `_rfb._tcp`, `_smb._tcp`, `_ssh._tcp`, and TidalDrift peers |
+| One-click VNC, SMB, SSH connections | Stable | Opens macOS-native handlers; credentials stored in Keychain |
+| TidalDrop file transfer | Stable | Peer-to-peer via mounted SMB or direct TCP fallback |
+| Clipboard sync | Stable | Text, images, and file references between paired instances |
+| Wake-on-LAN | Stable | MAC auto-discovery from ARP cache |
+| Guided setup wizard | Stable | Configures Screen Sharing, File Sharing, SSH, Firewall |
+| Full-desktop VNC streaming (Tier 1) | Stable | Uses macOS built-in Screen Sharing; no custom code |
+| In-app integration test suite | Stable | 22 tests covering Bonjour, networking, crypto, file transfer, streaming |
 
-### New in v1.4
+### What does not yet work
 
-- **End-to-end encryption** — All streaming traffic encrypted with AES-256-GCM. Authentication uses your saved device credentials (same password as VNC/file sharing), so there's nothing extra to configure. Key exchange via HKDF-SHA256 with per-session nonces — the password never touches the wire.
+| Feature | Status | Notes |
+|---|---|---|
+| LocalCast app-window streaming (Tier 2) | Not fully implemented | Architecture complete, code compiles and runs, but cross-machine reliability, window eligibility detection, and failure diagnostics have known gaps. See `TidalDrift/LocalCast/README.md`. |
+| Audio capture and forwarding | Not implemented | `LocalCastConfiguration.captureAudio` exists but is disabled |
+| Adaptive bitrate | Not implemented | No packet loss feedback loop yet |
 
-- **Retina-quality streaming** — Fixed a bug where window and app captures used point dimensions instead of pixel dimensions on Retina displays. Quality presets (Ultra/High/Balanced/Low) cap resolution from 4K down to 720p depending on what your LAN can handle.
+### Open-source infrastructure (new in v1.4.3)
 
-- **Remote window resize** — Resize the viewer window, and the streamed app's window resizes to match. Uses the Accessibility API to programmatically set the target window size. Skipped on loopback (would fight with yourself).
-
-- **Aspect ratio preservation** — Full-screen no longer stretches the video. Letterboxes or pillarboxes as needed. Fixed a timing race in the Metal renderer where resize events were reading stale drawable sizes.
-
-- **Input rate limiting** — Configurable token bucket (default 120 events/sec) on the host side. Prevents a misbehaving client from flooding CGEvent injection. Adjustable in settings from 60/sec to unlimited.
-
-- **Collapsible viewer toolbar** — The Apps button and stats overlay are tucked behind a small pill at the top of the viewer. Click to expand, click to collapse. Video fills the full window by default.
-
-- **Stability fixes** — Use-after-free prevention in VideoEncoder/VideoDecoder deinit, force-unwrap crash fix in UDPTransport, fragment reassembly safety limits, GPU memory management via periodic texture cache flushes, draw-on-demand rendering.
-
-### Introduced in v1.3.43
-
-- **LocalCast engine** — Full display, single window, and single app capture modes. H.264 and HEVC encoding with configurable bitrate (15–100 Mbps) and frame rate (up to 60fps). Custom UDP transport with packet fragmentation and reassembly. Metal rendering with inline compiled shaders.
-
-- **Remote input forwarding** — Mouse and keyboard events captured in the viewer, normalized to 0–1 coordinates, sent over UDP, injected on the host via CGEvent. Supports clicks, drags, scroll, and key events. Automatically disabled on loopback connections.
-
-- **Remote app picker** — Browse running apps on the host machine from the viewer. Switch between full display and app-specific streaming on the fly. Host enumerates apps via ScreenCaptureKit's SCShareableContent.
-
-- **Bonjour discovery** — Host advertises via `_tidaldrift-cast._udp`. Client discovers automatically. No IP addresses to type.
-
----
-
-## Everything else that got me here
-
-### Network discovery & peer system
-
-What started as basic Bonjour scanning evolved through multiple rewrites. I rebuilt the peer discovery system three times — first with NetService, then Network.framework, then a dns-sd command-line workaround when the framework approach hit Bonjour service conflicts. Devices are now remembered between launches, stale entries auto-cleanup on scan, and your own machine is highlighted and filtered from the menu bar.
-
-### TidalDrop file transfer
-
-Drag-and-drop file transfers between Macs over UDP. Started simple, broke repeatedly, got fixed repeatedly. Smart send detects mounted shares and uses them when available. Configurable destination folder. I re-implemented the transfer protocol twice from a stable baseline after the first version caused app hangs.
-
-### Clipboard sync
-
-Cross-machine clipboard sharing. Started as an experimental feature behind a toggle, graduated to enabled-by-default after proving stable. Syncs text, images, and file references between paired TidalDrift instances.
-
-### SSH integration
-
-Remote Login (SSH) configuration built into the onboarding flow. One-click SSH enablement with automatic user authorization. Quick SSH button on device cards opens Terminal with the connection pre-filled. Port 22 active scanning for discovery.
-
-### Permissions & diagnostics
-
-macOS permissions are a nightmare and I built the tooling to match. Self-healing PermissionHealthService detects stuck permissions. Permission Diagnostic tool explains exactly what's wrong and how to fix it. Screen Recording permission handling that avoids the System Settings popup loop. Installation cleanup detects and removes duplicate app bundles.
-
-### Build & release pipeline
-
-Developer ID signed builds, automated DMG creation, install-to-Applications workflow. The build script auto-kills old instances before launching. Release builds for distribution. I rewrote the build system itself (xcodebuild replaced the SPM-based approach) after hitting code signing and resource bundling issues.
-
-### UI & branding
-
-The app icon went through at least four iterations (wave + swirl, "SPICY" wave, simple wave, ultra-thin wave symbol) before landing on the current design. Device cards lost their hover expansion. Experimental features moved from popup sheets to tabs. The toolbar was simplified. There was a "Neural Bridge" branding phase that lasted exactly two commits.
-
-### Stability arc (v1.3.2 – v1.3.9)
-
-Seven patch releases focused entirely on not crashing. Memory corruption from thread-unsafe dictionary access. NWConnection premature deallocation. dns-sd process handler crashes. Thread-safe deviceCache. Thread-safe resolve dictionaries. Every one of these was a "how did this ever work" moment.
+- **SwiftLint** configuration (`TidalDrift/.swiftlint.yml`): 0 errors on the existing codebase, 173 warnings. Thresholds are set to pass current code while catching regressions. Noisy rules (trailing whitespace, trailing newline) are disabled pending a cleanup pass.
+- **GitHub Actions CI** (`.github/workflows/ci.yml`): SwiftLint + `swift build` on every PR and push to `main`. macOS 15 runners.
+- **Branch protection** on `main`: PRs required, status checks required, force pushes blocked.
+- **Documentation** updated: README, CONTRIBUTING, and LocalCast README rewritten to remove emdash usage, flag LocalCast status, and align with writing conventions.
 
 ---
 
-## v1.4.1 — Hardening
+## v1.4.1: Hardening
 
-Fourteen pull requests after the v1.4 release, the codebase went through a full audit and hardening pass. Everything from memory leaks to security vulnerabilities to hot-path allocations. The app is now signed, notarized, and stapled for Gatekeeper-clean distribution.
+**PRs:** #2, #4, #6, #8, #10, #12, #14
 
-### Dock icon + scrolling fix (PR #2)
+Fourteen pull requests after the v1.4.0 release, the codebase went through a full audit. The scope covered security vulnerabilities, memory leaks, performance regressions in hot paths, concurrency bugs, and resource cleanup. The app is signed, notarized, and stapled for Gatekeeper-clean distribution.
 
-The app was showing in the Dock despite being a menu-bar-only app. `LSUIElement` was set in Info.plist but the activation policy wasn't being enforced at launch. Fixed, and the device list in the menu bar popover wasn't scrollable — it was clipped by a fixed-height frame. Wrapped in a ScrollView with proper height constraints.
+### Security (PR #12)
 
-### TidalDrift peer highlighting + custom naming (PR #4)
+Five vulnerabilities identified and fixed:
 
-TidalDrift peers (other Macs running the app) now appear at the top of the device list with a red accent border so they stand out from generic Bonjour services. Added persistent custom display names that survive IP changes — each peer broadcasts a `tdname` field in its Bonjour TXT record. Names are editable from device detail and persist in UserDefaults.
+1. **Plaintext password in UserDefaults.** The LocalCast host password was stored via `@AppStorage`, which writes to `~/Library/Preferences` in plaintext. Migrated to Keychain with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Legacy values are auto-migrated and deleted. This is the kind of thing that works fine during development and becomes a CVE in production.
 
-### TidalCast VNC-first architecture (PR #6)
+2. **Path traversal in TidalDrop.** A malicious peer could send a filename like `../../.ssh/authorized_keys` and write outside the destination folder. Added `sanitizeFilename()` using `URL.lastPathComponent` and rejecting hidden files.
 
-Replaced the custom streaming engine with macOS's built-in Screen Sharing (VNC) as the primary streaming path. The original LocalCast engine (ScreenCaptureKit + VideoToolbox + Metal + UDP) is preserved and documented but no longer the default. The reason: VNC is battle-tested, supports full Retina, handles clipboard and drag-and-drop natively, and doesn't require Screen Recording permission prompts that reset on every rebuild.
+3. **Metadata size bomb.** Incoming TidalDrop metadata had no size limit. A peer could send a multi-GB length prefix and exhaust memory. Added a 1 MB cap.
 
-The new architecture adds app-window streaming on top of VNC — the client can select a single app from the host and present it in its own native-feeling window, with full input forwarding. This is the key differentiator over plain Screen Sharing.
+4. **Shell injection in Bonjour resolution.** Service names from mDNS were interpolated into `dns-sd -L` shell commands without escaping. Sanitized `'` and `\` metacharacters.
 
-### Memory management (PR #8)
+5. **Removed `executeWithSudo`.** A deprecated method that passed passwords as command-line arguments, visible to any process via `ps`.
 
-Four categories of leaks fixed:
-- **Window lifecycle**: `LocalCastViewerWindow` and device detail windows were creating new instances on every open without closing old ones. Added window tracking and reuse.
-- **Event monitors**: Global NSEvent monitors (keyboard shortcuts, mouse tracking) were added but never removed. Stored references and remove in `deinit`/close.
-- **Timer leaks**: Multiple `Timer.scheduledTimer` calls without invalidation on teardown. Added proper cleanup in `disconnect()` and `deinit`.
-- **Strong captures in closures**: Singleton dispatch closures capturing `self` strongly, preventing deallocation even when the object graph should have been released.
+### Memory management (PRs #8, #12, #14)
 
-### Network test fix (PR #10)
+Four categories of leaks, each discovered the hard way:
 
-The UDP and TCP port-bind integration tests were failing with `POSIXErrorCode(rawValue: 22): Invalid argument` after every rebuild. Root cause: `NWListener` requires Local Network TCC permission, which gets reset when the code signature changes (i.e., every build). Replaced with raw BSD sockets bound to `INADDR_LOOPBACK`, which bypass TCC entirely. Also fixed `AtomicFlag` to use `os_unfair_lock` for actual thread safety — the previous implementation was a plain `Bool` with no synchronization, which could cause `withCheckedContinuation` to resume twice.
+- **Window lifecycle.** `LocalCastViewerWindow` and device detail windows created new instances on every open without closing old ones. Added window tracking and reuse.
+- **Event monitors.** Global `NSEvent` monitors (keyboard shortcuts, mouse tracking) were added but never removed. Stored references; remove in `deinit`/close.
+- **Timer leaks.** Multiple `Timer.scheduledTimer` calls without invalidation on teardown. Added cleanup in `disconnect()` and `deinit`.
+- **Strong captures in closures.** Singleton dispatch closures capturing `self` strongly, preventing deallocation even when the object graph should have released.
 
-### Critical audit — security, performance, concurrency (PR #12)
+Additional resource cleanup in PR #14: `NWPathMonitor` and UDP listener cancelled in `stopBrowsing()`, incoming NWConnections tracked and cancelled on teardown, 60-second peer prune timer to prevent unbounded dictionary growth, `CVMetalTextureCache` flushed on viewer close, diagnostic timer capped at 60 seconds.
 
-A comprehensive audit of the entire codebase produced 15 critical and high-priority fixes:
+### Performance (PRs #12, #14)
 
-**Security**
-- **Plaintext password in UserDefaults**: The LocalCast host password was stored via `@AppStorage` (i.e., plaintext in `~/Library/Preferences`). Migrated to Keychain with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Legacy values are auto-migrated and then deleted.
-- **Path traversal in TidalDrop**: A malicious peer could send a filename like `../../.ssh/authorized_keys` and write outside the destination folder. Added `sanitizeFilename()` using `URL.lastPathComponent` and rejecting hidden files.
-- **Metadata size bomb**: Incoming TidalDrop metadata had no size limit — a peer could send a multi-GB length prefix and exhaust memory. Added a 1 MB cap.
-- **Shell injection in Bonjour resolution**: Service names from mDNS were interpolated into `dns-sd -L` shell commands without escaping. Sanitized `'` and `\` metacharacters.
-- **Removed `executeWithSudo`**: A deprecated method that passed passwords as command-line arguments (visible in `ps` output).
+- **Per-frame allocations in the video pipeline.** `VideoEncoder.convertAVCCToAnnexB` copied the entire buffer to `[UInt8]`, then built output byte-by-byte. Replaced with `withUnsafeBytes` and `Data(capacity:)` pre-allocation. Same treatment applied to `VideoDecoder`, `PacketProtocol.serialize/deserialize`, and `UDPTransport.FragmentHeader.deserialize`.
+- **`Date()` in hot paths.** Every packet timestamp created a `Date` object (heap allocation). Replaced with `CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970`.
+- **`RelativeDateTimeFormatter` per render cycle.** Allocated once per offline device per SwiftUI render. Now a static shared instance.
+- **Fragment eviction.** Changed from O(n) `keys.min()` to O(1) via tracked `oldestBufferedFrameId`.
+- **Discovery debouncing.** `updatePublishedDevices()` debounced by 200ms to coalesce rapid discovery events into a single sort + serialize + UserDefaults write.
 
-**Performance**
-- **Per-frame allocations in video pipeline**: `VideoEncoder.convertAVCCToAnnexB` was copying the entire buffer to `[UInt8]`, then building output byte-by-byte. Replaced with `withUnsafeBytes` and `Data(capacity:)` pre-allocation. Same treatment for `VideoDecoder`, `PacketProtocol.serialize/deserialize`, and `UDPTransport.FragmentHeader.deserialize`.
-- **`Date()` in hot paths**: Every packet timestamp was creating a `Date` object (heap allocation). Replaced with `CFAbsoluteTimeGetCurrent() + kCFAbsoluteTimeIntervalSince1970`.
+### Concurrency (PRs #10, #12, #14)
 
-**Memory management**
-- **`HostSession` missing `deinit`**: The transport, encoder (wrapping `VTCompressionSession`), and input injector were never cleaned up. Added `deinit` to stop transport, invalidate encoder, and restore apps.
-- **`ScreenCaptureManager` retain cycle**: `SCStream` holds a strong reference to its `SCStreamOutput` delegate. Without explicit `stopCapture` + nil in `deinit`, neither object is ever released.
+- `UDPTransport` counters (`sendCount`, `receiveCount`, `frameCounter`) mutated from multiple queues without synchronization. Protected with `NSLock`.
+- `UDPTransport.sessionKey` protected with a dedicated lock (written during auth, read on every packet).
+- `StreamingNetworkService`: NWConnection captured weakly in state handlers to break retain cycles; per-connection `DispatchQueue` replaced with shared service queue.
+- `SharingConfigurationService`: all five `Process.waitUntilExit()` calls replaced with `terminationHandler` to avoid blocking the Swift concurrency cooperative thread pool.
+- `AtomicFlag` replaced with `os_unfair_lock` for actual thread safety. The previous implementation was a plain `Bool` with no synchronization, which could cause `withCheckedContinuation` to resume twice.
 
-**Concurrency**
-- **`UDPTransport` counter races**: `sendCount`, `receiveCount`, and `frameCounter` were mutated from multiple queues without synchronization. Protected with `NSLock`.
+### Architecture change: VNC-first streaming (PR #6)
 
-### Remaining audit polish (PR #14)
+Replaced the custom streaming engine with macOS built-in Screen Sharing (VNC) as the primary streaming path. The original LocalCast engine (ScreenCaptureKit + VideoToolbox + Metal + UDP) is preserved as Tier 2 for app-window streaming.
 
-The second audit pass addressed lower-priority findings:
+The reasoning: VNC is battle-tested, supports full Retina, handles clipboard and drag-and-drop natively, and does not require Screen Recording permission prompts that reset on every code signature change (i.e., every development build). The custom pipeline exists because VNC cannot stream a single app window in its own native-feeling window. That capability is the differentiator, but it is not yet reliable enough to be the default.
 
-**Resource cleanup**
-- `NetworkDiscoveryService`: `NWPathMonitor` and UDP listener were never cancelled — now cleaned up in `stopBrowsing()`
-- `TidalDropService`: incoming NWConnections tracked and cancelled on teardown via new `stopListening()` method
-- `TidalDriftPeerService`: 60-second prune timer removes peers unseen for 5+ minutes, preventing unbounded dictionary growth
-- `MetalRenderer`: `deinit` flushes `CVMetalTextureCache` to release GPU memory when the viewer closes
-- `ClientSession`: diagnostic timer capped at 60 seconds to prevent indefinite firing
+### Other fixes
 
-**Performance**
-- `DiscoveredDevice`: `RelativeDateTimeFormatter` was allocated per offline device per render cycle — now a static shared instance. `Date()` calls across `isOnline`/`isStale`/`isRecentlyConfirmed`/`lastSeenText` consolidated into a single `age` property.
-- `UDPTransport`: fragment eviction changed from O(n) `keys.min()` to O(1) via tracked `oldestBufferedFrameId`
-- `NetworkDiscoveryService`: `updatePublishedDevices()` debounced by 200ms to coalesce rapid discovery events into a single sort + serialize + UserDefaults write
-
-**Thread safety**
-- `UDPTransport.sessionKey` protected with a dedicated `NSLock` (written during auth, read on every packet)
-- `StreamingNetworkService`: NWConnection captured weakly in state handlers to break retain cycles; per-connection `DispatchQueue` allocations replaced with the shared service queue
-
-**Logging**
-- `StreamingNetworkService`: world-readable `/tmp/tidaldrift_share.log` replaced with `os.Logger`
-- `SharingConfigurationService`: all 5 `Process.waitUntilExit()` calls replaced with `terminationHandler` to avoid blocking the Swift concurrency cooperative thread pool
-
-### Signing + notarization
-
-The DMG is now Developer ID signed with hardened runtime, notarized by Apple, and stapled. Gatekeeper will allow installation without the "unidentified developer" warning. The release build script (`build-release.sh`) handles the full pipeline — see `TidalDrift/.env.example` for the required notarization credentials.
+- **Dock icon visibility** (PR #2): `LSUIElement` was set in Info.plist but the activation policy was not enforced at launch. Fixed. Menu bar device list clipped by fixed-height frame; wrapped in ScrollView.
+- **Peer highlighting** (PR #4): TidalDrift peers appear at the top of the device list with an accent border. Persistent custom display names via `tdname` Bonjour TXT record field.
+- **Network tests** (PR #10): `NWListener` requires Local Network TCC permission, which resets on every code signature change. Replaced with raw BSD sockets bound to `INADDR_LOOPBACK`.
+- **Logging** (PR #14): world-readable `/tmp/tidaldrift_share.log` replaced with `os.Logger`.
 
 ---
 
-## What's next
+## v1.4.0: LocalCast
 
-- Audio capture and forwarding
-- Adaptive bitrate based on packet loss
-- Clipboard sync during LocalCast sessions
-- File drop into the viewer window
+The headline release. 99 commits from the initial commit to this point.
+
+LocalCast is a custom screen streaming engine built entirely with Apple frameworks: ScreenCaptureKit for capture, VideoToolbox for H.264/HEVC encoding, Metal for rendering, raw UDP for transport. The pipeline runs in-process with no external dependencies (no ffmpeg, no GStreamer, no external daemons).
+
+### Design choices and rationale
+
+**UDP over TCP.** TCP's congestion control and retransmission add latency worse than dropping a frame. Lost fragments result in a dropped frame; the next keyframe (approximately every 1 second) resyncs. Input events are also UDP, which is acceptable for mouse moves on a LAN. This is a latency-first design choice; a reliability-first design would choose TCP and accept the latency cost.
+
+**Annex B over AVCC.** VideoToolbox outputs AVCC (length-prefixed NAL units). The pipeline converts to Annex B (start-code delimited) on the wire, making the stream self-describing: the decoder finds NAL boundaries without out-of-band signaling, and SPS/PPS are inline with keyframes. The tradeoff is slightly larger wire format, but the simplicity of a self-contained stream outweighs the overhead on a LAN.
+
+**Inline Metal shaders.** Compiled from source strings at init time rather than shipped as a `.metallib`. This avoids SPM resource bundling issues and ensures the renderer works in any build configuration. The tradeoff is a one-time compilation cost at viewer launch.
+
+**1200-byte fragment size.** Chosen to stay under typical MTU (1500) with room for IP/UDP headers. Keyframes can exceed 300 KB, splitting into approximately 250 fragments. Reassembly is frame-ID based with a 100-frame LRU. This is conservative; a more aggressive choice would probe path MTU, but the additional complexity is not justified on a LAN.
+
+**End-to-end AES-256-GCM encryption.** All streaming traffic encrypted. Authentication uses saved device credentials (same password as VNC/file sharing). Key exchange via HKDF-SHA256 with per-session nonces; the password never touches the wire.
+
+### New capabilities in v1.4.0
+
+- Full display, single window, and single app capture modes
+- H.264 and HEVC encoding at configurable bitrate (15--100 Mbps) and frame rate (up to 60fps)
+- Retina-quality streaming with quality presets (Ultra/High/Balanced/Low) from 4K to 720p
+- Remote mouse and keyboard input with configurable token bucket rate limiting (default 120 events/sec)
+- Remote app picker: browse running apps on the host, switch streams on the fly
+- Remote window resize via Accessibility API
+- Aspect ratio preservation with letterboxing/pillarboxing
+- Collapsible viewer toolbar
+- Loopback demo mode for development (input injection skipped to avoid cursor feedback)
+
+---
+
+## v1.0 through v1.3: Foundation
+
+The first 80 commits built the core product: network discovery, device management, file transfer, and the menu-bar UI.
+
+### Network discovery
+
+The peer discovery system was rewritten three times: first with `NetService`, then `Network.framework`, then a `dns-sd` command-line workaround when `Network.framework` hit Bonjour service conflicts. The `dns-sd` approach introduced shell command execution, which later required security hardening (see v1.4.1).
+
+Devices are remembered between launches via UserDefaults persistence. Stale entries auto-cleanup on scan. The current machine is highlighted and filtered from the menu bar list.
+
+### TidalDrop
+
+Peer-to-peer file transfer. The transfer protocol was reimplemented twice from a stable baseline after the first version caused app hangs. Smart send detects mounted SMB shares and uses them when available; falls back to direct TCP.
+
+### Stability arc (v1.3.2 through v1.3.9)
+
+Seven patch releases focused on crash elimination. Root causes, in order: thread-unsafe dictionary access, `NWConnection` premature deallocation, `dns-sd` process handler crashes, thread-unsafe `deviceCache`, thread-unsafe resolve dictionaries. Each fix addressed a concurrency bug that, in retrospect, was always there but only manifested under specific timing conditions.
+
+### Branding
+
+The app icon went through at least four iterations before landing on the current design. There was a brief "Neural Bridge" branding phase (v1.3.11, v1.3.12) that lasted exactly two commits. The project was renamed back to TidalDrift in v1.3.13.
+
+---
+
+## Roadmap
+
+The following items are planned but not yet implemented. No timeline commitments.
+
+- Audio capture and forwarding over LocalCast
+- Adaptive bitrate based on packet loss feedback
+- Clipboard sync during active LocalCast sessions
+- File drop into the LocalCast viewer window
 - Latency measurement from heartbeat RTT
+- Full reliability pass on LocalCast app-window streaming (Tier 2)
