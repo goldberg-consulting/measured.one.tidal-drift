@@ -72,9 +72,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
     
     func showOnboarding() {
+        NSApp.activate(ignoringOtherApps: true)
         if let existing = onboardingWindow {
+            existing.orderFrontRegardless()
             existing.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
             return
         }
         
@@ -114,9 +115,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
     
     private func showSettings() {
+        NSApp.activate(ignoringOtherApps: true)
         if let existing = settingsWindow {
+            existing.orderFrontRegardless()
             existing.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
             return
         }
         

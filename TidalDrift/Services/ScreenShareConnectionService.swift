@@ -86,8 +86,8 @@ class ScreenShareConnectionService: @unchecked Sendable {
         do {
             resolved = try await ConnectionResolver.shared.resolve(
                 device: device,
-                strategy: .hostnameFirst,
-                timeout: 10.0
+                strategy: .ipFirst,
+                timeout: 5.0
             )
             logger.info("🔌 Resolved address: \(resolved.address) via \(resolved.method.rawValue)")
         } catch let error as ConnectionResolver.ResolutionError {
@@ -249,8 +249,8 @@ class ScreenShareConnectionService: @unchecked Sendable {
         do {
             resolved = try await ConnectionResolver.shared.resolve(
                 device: device,
-                strategy: .hostnameFirst,
-                timeout: 10.0
+                strategy: .ipFirst,
+                timeout: 5.0
             )
         } catch let error as ConnectionResolver.ResolutionError {
             throw ConnectionError.resolutionFailed(error.localizedDescription)
@@ -303,8 +303,8 @@ class ScreenShareConnectionService: @unchecked Sendable {
         do {
             resolved = try await ConnectionResolver.shared.resolve(
                 device: device,
-                strategy: .hostnameFirst,
-                timeout: 10.0
+                strategy: .ipFirst,
+                timeout: 5.0
             )
         } catch let error as ConnectionResolver.ResolutionError {
             throw ConnectionError.resolutionFailed(error.localizedDescription)
@@ -388,7 +388,7 @@ class ScreenShareConnectionService: @unchecked Sendable {
                 // Try to resolve using hostname-first strategy
                 let resolved = try await ConnectionResolver.shared.resolve(
                     device: device,
-                    strategy: .hostnameFirst,
+                    strategy: .ipFirst,
                     timeout: 5.0
                 )
                 // Use hostname.local for SSH if available (more reliable)
@@ -451,8 +451,8 @@ class ScreenShareConnectionService: @unchecked Sendable {
         do {
             _ = try await ConnectionResolver.shared.resolve(
                 device: device,
-                strategy: .hostnameFirst,
-                timeout: 8.0
+                strategy: .ipFirst,
+                timeout: 5.0
             )
             // If we successfully resolved, the device is reachable
             return true
