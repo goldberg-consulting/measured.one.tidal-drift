@@ -18,13 +18,13 @@ Thank you for your interest in contributing to TidalDrift. This document covers 
 - Verify the build completes: `cd TidalDrift && ./build-app.sh`
 - Submit a pull request targeting `main`
 
-## CI and Release Notes
+## CI and Releases
 
-- CI runs `swiftlint`, `swift build`, `swift test`, and `xcodebuild` for the `TidalDrift` scheme with code signing disabled.
-- Release notarization credentials are loaded from `TidalDrift/.env` and should never be committed.
-- Apple Developer notarization credentials are only required for `./build-release.sh` without `--skip-notarize`.
+- CI runs `swiftlint`, `swift build`, `swift test`, and `xcodebuild` on every push and PR to `main`.
+- Releases are automated: publishing a GitHub Release triggers a workflow that builds, signs, notarizes, uploads the DMG, and bumps the Homebrew cask.
+- The release workflow requires maintainer approval via a protected GitHub environment.
 - Build version metadata is sourced from `TidalDrift/version.env` (`APP_VERSION`, `BUILD_NUMBER`).
-- `build-release.sh` does not copy artifacts to a network share unless you opt in with `COPY_TO_SHARE=1`.
+- For local release builds, `build-release.sh` loads credentials from `TidalDrift/.env` (never committed). Pass `--skip-notarize` to skip Apple notarization.
 
 ## Code Style
 
@@ -35,13 +35,11 @@ Thank you for your interest in contributing to TidalDrift. This document covers 
 
 ## Areas for Contribution
 
-- **LocalCast app-window streaming**: the custom streaming pipeline is architecturally complete but not yet fully implemented. See [TidalDrift/LocalCast/README.md](TidalDrift/LocalCast/README.md) for the current state.
-- **Linux/cross-platform support** for the networking layer
-- **Improved codec support** (AV1, VP9)
-- **Audio streaming** over LocalCast
-- **Error recovery** in the UDP transport layer
-- **Accessibility** improvements
+- **Bonjour discovery reliability** on complex network topologies (VPN, multiple interfaces)
+- **Peer version handshake** and compatibility warnings between TidalDrift instances
+- **Accessibility** improvements (VoiceOver, keyboard navigation)
 - **Localization** to other languages
+- **Linux/cross-platform support** for the networking layer
 
 ## Reporting Issues
 
