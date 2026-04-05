@@ -1,0 +1,176 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-sign-notarize:
+    name: Build, Sign, Notarize, and Publish
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.3.app/Contents/Developer
+
+      - name: Read version
+        id: version
+        working-directory: TidalDrift
+        run: |
+          source version.env
+          echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Import signing certificate
+        env:
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          KEYCHAIN="build.keychain"
+          KEYCHAIN_PASSWORD="actions"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 "$KEYCHAIN"
+
+          echo "$P12_BASE64" | base64 -d > /tmp/cert.p12
+          security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm /tmp/cert.p12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          DEV_ID=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          echo "DEV_ID=$DEV_ID" >> "$GITHUB_ENV"
+          echo "Found certificate: $DEV_ID"
+
+      - name: Store notarization credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          TEAM_ID: ${{ secrets.TEAM_ID }}
+          APP_SPECIFIC_PASSWORD: ${{ secrets.APP_SPECIFIC_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials "notarytool-profile" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$TEAM_ID" \
+            --password "$APP_SPECIFIC_PASSWORD"
+
+      - name: Build (Release)
+        working-directory: TidalDrift
+        run: |
+          xcodebuild \
+            -scheme TidalDrift \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath ./build-xcode \
+            clean build
+
+      - name: Create app bundle
+        working-directory: TidalDrift
+        run: |
+          source version.env
+          APP="TidalDrift.app"
+          rm -rf "$APP"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          ditto --norsrc ./build-xcode/Build/Products/Release/TidalDrift "$APP/Contents/MacOS/TidalDrift"
+          [ -f "Resources/AppIcon.icns" ] && ditto --norsrc Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+          [ -d "./build-xcode/Build/Products/Release/TidalDrift_TidalDrift.bundle" ] && \
+            ditto --norsrc ./build-xcode/Build/Products/Release/TidalDrift_TidalDrift.bundle "$APP/Contents/Resources/TidalDrift_TidalDrift.bundle"
+
+          cat > "$APP/Contents/Info.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+              <key>CFBundleExecutable</key><string>TidalDrift</string>
+              <key>CFBundleIdentifier</key><string>com.goldbergconsulting.tidaldrift</string>
+              <key>CFBundleName</key><string>TidalDrift</string>
+              <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
+              <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleIconFile</key><string>AppIcon</string>
+              <key>LSMinimumSystemVersion</key><string>13.0</string>
+              <key>LSUIElement</key><true/>
+              <key>NSHighResolutionCapable</key><true/>
+              <key>NSLocalNetworkUsageDescription</key><string>TidalDrift discovers Macs on your network.</string>
+              <key>NSBonjourServices</key><array><string>_rfb._tcp</string><string>_smb._tcp</string><string>_afpovertcp._tcp</string><string>_ssh._tcp</string><string>_tidaldrift._tcp</string><string>_tidaldrop._tcp</string><string>_tidalclip._tcp</string><string>_tidalstream._tcp</string></array>
+          </dict></plist>
+          EOF
+          echo -n "APPL????" > "$APP/Contents/PkgInfo"
+
+          find "$APP" -exec xattr -c {} \; 2>/dev/null || true
+
+      - name: Sign
+        working-directory: TidalDrift
+        run: |
+          codesign --force --deep --options runtime \
+            --sign "$DEV_ID" --timestamp \
+            --entitlements TidalDrift.entitlements \
+            TidalDrift.app
+          codesign --verify --deep --strict TidalDrift.app
+
+      - name: Create DMG
+        working-directory: TidalDrift
+        run: |
+          source version.env
+          DMG="TidalDrift-${APP_VERSION}.dmg"
+          rm -rf dmg-staging "$DMG"
+          mkdir dmg-staging
+          ditto --norsrc TidalDrift.app dmg-staging/TidalDrift.app
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname TidalDrift -srcfolder dmg-staging -ov -format UDZO "$DMG"
+          rm -rf dmg-staging
+          codesign --force --sign "$DEV_ID" --timestamp "$DMG"
+          echo "DMG_PATH=$DMG" >> "$GITHUB_ENV"
+
+      - name: Notarize
+        working-directory: TidalDrift
+        run: |
+          xcrun notarytool submit "$DMG_PATH" --keychain-profile "notarytool-profile" --wait
+          xcrun stapler staple "$DMG_PATH"
+
+      - name: Upload DMG to release
+        working-directory: TidalDrift
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" "$DMG_PATH" --clobber
+
+      - name: Compute SHA256
+        id: sha
+        working-directory: TidalDrift
+        run: |
+          SHA=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $SHA"
+
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set; skipping tap update."
+            exit 0
+          fi
+
+          source TidalDrift/version.env
+          SHA="${{ steps.sha.outputs.sha256 }}"
+
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/goldberg-consulting/homebrew-tap.git" /tmp/tap
+          cd /tmp/tap
+
+          CASK="Casks/tidaldrift.rb"
+          sed -i '' "s/version \".*\"/version \"${APP_VERSION}\"/" "$CASK"
+          sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" "$CASK"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$CASK"
+          git diff --cached --quiet && echo "No changes to tap" && exit 0
+          git commit -m "bump tidaldrift to ${APP_VERSION}"
+          git push origin main
+
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain build.keychain 2>/dev/null || true
