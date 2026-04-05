@@ -308,6 +308,18 @@ struct MenuBarDeviceRow: View {
         return creds.password.isEmpty ? nil : creds.password
     }
     
+    /// Close the status-bar popover before opening external apps/URLs.
+    private func dismissPopoverAndRun(_ action: @escaping () -> Void) {
+        if let popover = NSApp.keyWindow,
+           popover.level == .statusBar || popover.styleMask.contains(.nonactivatingPanel) || popover.className.contains("StatusBar") {
+            popover.close()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NSApp.activate(ignoringOtherApps: true)
+            action()
+        }
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -332,16 +344,22 @@ struct MenuBarDeviceRow: View {
                 if isHovering {
                     HStack(spacing: 4) {
                         QuickActionIcon(icon: "display", color: .blue, tooltip: "Screen Share (VNC)") {
-                            Task { try? await ScreenShareConnectionService.shared.connect(to: device) }
+                            dismissPopoverAndRun {
+                                Task { try? await ScreenShareConnectionService.shared.connect(to: device) }
+                            }
                         }
                         
                         QuickActionIcon(icon: "folder", color: .orange, tooltip: "File Share") {
-                            Task { try? await ScreenShareConnectionService.shared.connectToFileShare(device: device) }
+                            dismissPopoverAndRun {
+                                Task { try? await ScreenShareConnectionService.shared.connectToFileShare(device: device) }
+                            }
                         }
                         
                         if showSSH {
                             QuickActionIcon(icon: "terminal", color: .green, tooltip: "SSH") {
-                                ScreenShareConnectionService.shared.connectToSSH(device: device)
+                                dismissPopoverAndRun {
+                                    ScreenShareConnectionService.shared.connectToSSH(device: device)
+                                }
                             }
                         }
                         
