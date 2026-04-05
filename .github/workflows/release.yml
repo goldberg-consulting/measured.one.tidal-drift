@@ -11,6 +11,7 @@ jobs:
   build-sign-notarize:
     name: Build, Sign, Notarize, and Publish
     runs-on: macos-15
+    environment: release
     steps:
       - uses: actions/checkout@v4
 

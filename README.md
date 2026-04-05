@@ -122,6 +122,22 @@ GitHub Actions validates three paths on every push and pull request to `main`:
 - `swift build` and `swift test` for SwiftPM compile and test coverage
 - `xcodebuild` on the `TidalDrift` scheme (with code signing disabled) to validate the app target build path
 
+### Releasing
+
+Releases are automated via GitHub Actions. When a GitHub Release is published, the workflow:
+
+1. Builds the app with `xcodebuild` (Release configuration)
+2. Creates the `.app` bundle with correct `Info.plist` and entitlements
+3. Signs with a Developer ID certificate imported from encrypted secrets
+4. Creates and signs the DMG
+5. Notarizes via Apple's notary service and staples the ticket
+6. Uploads the notarized DMG to the GitHub Release
+7. Updates the [Homebrew cask](https://github.com/goldberg-consulting/homebrew-tap) with the new version and SHA256
+
+The release workflow runs in a protected GitHub environment (`release`) that requires approval from a maintainer. Only repository admins can publish releases.
+
+No signing certificates, Apple credentials, or secrets are stored in the repository. All sensitive values are configured as GitHub Actions encrypted secrets.
+
 ## Permissions
 
 TidalDrift requests several macOS permissions on first use:
