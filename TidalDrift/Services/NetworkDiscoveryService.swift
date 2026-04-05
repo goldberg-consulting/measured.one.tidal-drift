@@ -214,9 +214,9 @@ class NetworkDiscoveryService: NSObject, ObservableObject, NetServiceBrowserDele
         pathMonitor = NWPathMonitor()
         pathMonitor?.pathUpdateHandler = { [weak self] path in
             if path.status == .satisfied {
-                // Network became available - refresh discovery
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                     self?.refreshScan()
+                    TidalDriftPeerService.shared.restartAll()
                 }
             }
         }
