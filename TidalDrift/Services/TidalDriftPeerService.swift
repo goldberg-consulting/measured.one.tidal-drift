@@ -139,6 +139,8 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     
     private var dnssdProcess: Process?
     
+    private var advertiseMonitorTimer: Timer?
+    
     func startAdvertising() {
         guard dnssdProcess == nil else {
             Self.log("Already advertising, skipping")
@@ -146,7 +148,11 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         }
         
         Self.log("📢 Starting Bonjour advertisement via dns-sd")
-        
+        launchAdvertiseProcess()
+        startAdvertiseMonitor()
+    }
+    
+    private func launchAdvertiseProcess() {
         let currentIP = NetworkUtils.getLocalIPAddress() ?? localInfo.ipAddress
         
         let process = Process()
@@ -190,7 +196,24 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         }
     }
     
+    private func startAdvertiseMonitor() {
+        advertiseMonitorTimer?.invalidate()
+        DispatchQueue.main.async { [weak self] in
+            self?.advertiseMonitorTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                if let proc = self.dnssdProcess, !proc.isRunning {
+                    Self.log("⚠️ Advertise process died (exit \(proc.terminationStatus)), restarting")
+                    self.dnssdProcess = nil
+                    self.launchAdvertiseProcess()
+                }
+            }
+        }
+    }
+    
     func stopAdvertising() {
+        advertiseMonitorTimer?.invalidate()
+        advertiseMonitorTimer = nil
+        
         telemetryTimer?.invalidate()
         telemetryTimer = nil
         
@@ -203,7 +226,6 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         }
         netService = nil
         
-        // Stop dns-sd process
         if let process = dnssdProcess, process.isRunning {
             process.terminate()
             Self.log("Terminated dns-sd process")
@@ -220,6 +242,17 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         stopAdvertising()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             self.startAdvertising()
+        }
+    }
+    
+    /// Full restart of advertising and discovery, e.g. after a network change.
+    func restartAll() {
+        Self.log("🔄 Full restart: network change or recovery")
+        stopAdvertising()
+        stopDiscovery()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.startAdvertising()
+            self?.startDiscovery()
         }
     }
     
@@ -258,6 +291,8 @@ class TidalDriftPeerService: NSObject, ObservableObject {
     private var browseProcess: Process?
     private var browseOutputPipe: Pipe?
     
+    private var browseMonitorTimer: Timer?
+    
     func startDiscovery() {
         guard browseProcess == nil else {
             Self.log("Already browsing, skipping")
@@ -265,8 +300,19 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         }
         
         Self.log("Starting discovery for \(serviceType) via dns-sd")
+        launchBrowseProcess()
+        startBrowseMonitor()
         
-        // Use dns-sd command line tool which bypasses permission issues
+        if peerPruneTimer == nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.peerPruneTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                    self?.pruneStaleDiscoveredPeers()
+                }
+            }
+        }
+    }
+    
+    private func launchBrowseProcess() {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/dns-sd")
         process.arguments = ["-B", serviceType, "local."]
@@ -277,14 +323,9 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         
         browseOutputPipe = pipe
         
-        // Read output asynchronously
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            
-            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else {
-                return
-            }
-            
+            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
             self?.parseBrowseOutput(output)
         }
         
@@ -295,28 +336,34 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         } catch {
             Self.log("❌ Failed to start dns-sd browse: \(error)")
         }
-        
-        if peerPruneTimer == nil {
-            DispatchQueue.main.async { [weak self] in
-                self?.peerPruneTimer = Timer.scheduledTimer(
-                    timeInterval: 60,
-                    target: self as Any,
-                    selector: #selector(self?.pruneStaleDiscoveredPeers),
-                    userInfo: nil,
-                    repeats: true
-                )
+    }
+    
+    private func startBrowseMonitor() {
+        browseMonitorTimer?.invalidate()
+        DispatchQueue.main.async { [weak self] in
+            self?.browseMonitorTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                if let proc = self.browseProcess, !proc.isRunning {
+                    Self.log("⚠️ Browse process died (exit \(proc.terminationStatus)), restarting")
+                    self.browseProcess = nil
+                    self.browseOutputPipe?.fileHandleForReading.readabilityHandler = nil
+                    self.browseOutputPipe = nil
+                    self.launchBrowseProcess()
+                }
             }
         }
     }
     
     func stopDiscovery() {
+        browseMonitorTimer?.invalidate()
+        browseMonitorTimer = nil
+        
         browser?.cancel()
         browser = nil
         
         netServiceBrowser?.stop()
         netServiceBrowser = nil
         
-        // Stop dns-sd browse process
         browseOutputPipe?.fileHandleForReading.readabilityHandler = nil
         if let process = browseProcess, process.isRunning {
             process.terminate()
@@ -331,8 +378,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
         Self.log("Stopped discovery")
     }
     
-    /// Remove peers not refreshed in the last 5 minutes.
-    @objc private func pruneStaleDiscoveredPeers() {
+    private func pruneStaleDiscoveredPeers() {
         let staleThreshold: TimeInterval = 5 * 60
         let now = Date()
         var pruned = 0
@@ -428,8 +474,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             resolvePipes[name] = pipe
             resolveLock.unlock()
             
-            // Kill resolve process after 5 seconds
-            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { [weak self] in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) { [weak self] in
                 self?.cleanupResolve(name: name)
             }
         } catch {
@@ -586,8 +631,7 @@ class TidalDriftPeerService: NSObject, ObservableObject {
             
             try process.run()
             
-            // Kill lookup process after 3 seconds
-            DispatchQueue.global().asyncAfter(deadline: .now() + 3) { [weak self] in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 8) { [weak self] in
                 self?.cleanupLookup(name: name)
             }
         } catch {
