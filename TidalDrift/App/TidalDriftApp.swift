@@ -6,11 +6,6 @@ struct TidalDriftApp: App {
     @StateObject private var appState = AppState.shared
     
     var body: some Scene {
-        Settings {
-            SettingsView()
-                .environmentObject(appState)
-        }
-        
         MenuBarExtra {
             MenuBarView()
                 .environmentObject(appState)
