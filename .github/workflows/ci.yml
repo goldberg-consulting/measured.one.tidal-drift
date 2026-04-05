@@ -24,8 +24,8 @@ jobs:
         working-directory: TidalDrift
         run: swiftlint lint --reporter github-actions-logging
 
-  build:
-    name: Build
+  spm:
+    name: SwiftPM Build and Test
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -36,3 +36,27 @@ jobs:
       - name: Build with Swift Package Manager
         working-directory: TidalDrift
         run: swift build
+
+      - name: Test with Swift Package Manager
+        working-directory: TidalDrift
+        run: swift test
+
+  xcodebuild:
+    name: Xcode Build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.3.app/Contents/Developer
+
+      - name: Build app scheme with xcodebuild
+        working-directory: TidalDrift
+        run: |
+          xcodebuild \
+            -scheme TidalDrift \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build

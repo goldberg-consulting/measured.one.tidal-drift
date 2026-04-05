@@ -4,11 +4,15 @@
 # Uses xcodebuild (Debug) + Developer ID signing + DMG
 # Requires: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-set -e
-VERSION="1.4.3"
+set -euo pipefail
 APP_NAME="TidalDrift"
 BUNDLE_ID="com.goldbergconsulting.tidaldrift"
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION_FILE="$SCRIPT_DIR/version.env"
+[ -f "$VERSION_FILE" ] && source "$VERSION_FILE"
+VERSION="${APP_VERSION:-1.4.3}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
 
 RUN_APP=true; [[ "$1" == "--no-run" ]] && RUN_APP=false
 
@@ -18,9 +22,12 @@ echo -e "${BLUE}║     🌊 TidalDrift Dev Build v${VERSION}                   
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# Verify Xcode
-[[ "$(xcode-select -p)" != *"Xcode.app"* ]] && echo -e "${RED}❌ Run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer${NC}" && exit 1
-echo -e "${GREEN}✓ Xcode${NC}"
+# Verify Xcode tooling is available.
+if ! xcodebuild -version >/dev/null 2>&1; then
+    echo -e "${RED}❌ Xcode CLI tools not available. Run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Xcode ($(xcodebuild -version | head -1))${NC}"
 
 # Kill running instances
 pkill -9 -x "$APP_NAME" 2>/dev/null || true
@@ -47,9 +54,11 @@ fi
 
 # Build (Debug config so #if DEBUG features like loopback are available)
 echo -e "${BLUE}🔨 Building (Debug)...${NC}"
-xcodebuild -scheme "$APP_NAME" -configuration Debug -destination 'platform=macOS' -derivedDataPath ./build-xcode build 2>&1 | grep -E "(BUILD|error:)" | tail -5
+mkdir -p dist/logs
+BUILD_LOG="dist/logs/build-app.log"
+xcodebuild -scheme "$APP_NAME" -configuration Debug -destination 'platform=macOS' -derivedDataPath ./build-xcode build 2>&1 | tee "$BUILD_LOG"
 [ ! -f "./build-xcode/Build/Products/Debug/$APP_NAME" ] && echo -e "${RED}❌ Build failed${NC}" && exit 1
-echo -e "${GREEN}✓ Build${NC}"
+echo -e "${GREEN}✓ Build (log: ${BUILD_LOG})${NC}"
 
 # Create .app bundle
 echo -e "${BLUE}📦 Creating bundle...${NC}"
@@ -67,7 +76,7 @@ cat > "$APP_NAME.app/Contents/Info.plist" << EOF
     <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
     <key>CFBundleName</key><string>${APP_NAME}</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>

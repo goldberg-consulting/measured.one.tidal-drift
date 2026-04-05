@@ -109,6 +109,7 @@ TidalDrift/TidalDrift\ *.app/
 .env
 *.env
 !.env.example
+!TidalDrift/version.env
 
 # Build artifacts from build-app.sh / build-release.sh
 **/build-xcode/
