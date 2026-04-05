@@ -1,6 +1,6 @@
 cask "tidaldrift" do
   version "1.4.3"
-  sha256 "b94bc4ccd3aedec1cbc1de92d10b30a4c096c5f94acc05f885f99cffc24d16d9"
+  sha256 "0127e484c102cf753333ae1e89b230c2f86136a79d65a73beb7c537bed2a9530"
 
   url "https://github.com/goldberg-consulting/measured.one.tidal-drift/releases/download/v#{version}/TidalDrift-#{version}.dmg"
   name "TidalDrift"
@@ -10,6 +10,11 @@ cask "tidaldrift" do
   depends_on macos: ">= :ventura"
 
   app "TidalDrift.app"
+
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/TidalDrift.app"]
+  end
 
   zap trash: [
     "~/Library/Preferences/com.goldbergconsulting.tidaldrift.plist",
