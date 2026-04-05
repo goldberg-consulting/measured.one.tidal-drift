@@ -36,6 +36,18 @@ struct MenuBarView: View {
         .frame(width: 340)
     }
     
+    /// Close the menu bar popover, then run an action on the next run loop
+    /// so the target window can become key without competing for focus.
+    private func dismissPopoverAndRun(_ action: @escaping () -> Void) {
+        if let popover = NSApp.keyWindow, popover.level == .statusBar || popover.styleMask.contains(.nonactivatingPanel) || popover.className.contains("StatusBar") {
+            popover.close()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NSApp.activate(ignoringOtherApps: true)
+            action()
+        }
+    }
+    
     // MARK: - Header
     
     private var headerSection: some View {
@@ -211,23 +223,14 @@ struct MenuBarView: View {
             .disabled(discoveryService.isScanningSubnet)
             
             MenuBarActionButton(icon: "gearshape", label: "Settings...") {
-                NSApp.activate(ignoringOtherApps: true)
-                let didSend: Bool
-                if #available(macOS 14.0, *) {
-                    didSend = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                } else {
-                    didSend = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-                }
-                
-                // Fallback: call AppDelegate directly if responder chain did not handle it.
-                if !didSend, let delegate = NSApp.delegate as? AppDelegate {
-                    delegate.showSettingsWindow(nil)
+                dismissPopoverAndRun {
+                    (NSApp.delegate as? AppDelegate)?.showSettingsWindow(nil)
                 }
             }
             
             MenuBarActionButton(icon: "arrow.counterclockwise", label: "Run Setup Wizard") {
-                if let delegate = NSApp.delegate as? AppDelegate {
-                    delegate.showOnboarding()
+                dismissPopoverAndRun {
+                    (NSApp.delegate as? AppDelegate)?.showOnboarding()
                 }
             }
             

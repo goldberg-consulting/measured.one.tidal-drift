@@ -9,6 +9,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAppearance()
+        installSettingsMenuItem()
         
         UNUserNotificationCenter.current().delegate = self
         
@@ -71,7 +72,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
     
     func showOnboarding() {
-        if let existing = onboardingWindow, existing.isVisible {
+        if let existing = onboardingWindow {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -113,7 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
     
     private func showSettings() {
-        if let existing = settingsWindow, existing.isVisible {
+        if let existing = settingsWindow {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -153,6 +154,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     
     private func configureAppearance() {
         NSWindow.allowsAutomaticWindowTabbing = false
+    }
+    
+    /// Add Cmd+, for Settings since we removed the SwiftUI Settings scene.
+    private func installSettingsMenuItem() {
+        guard let appMenu = NSApp.mainMenu?.item(at: 0)?.submenu else { return }
+        let settingsItem = NSMenuItem(
+            title: "Settings\u{2026}",
+            action: #selector(showSettingsWindow(_:)),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        let insertIndex = appMenu.items.firstIndex(where: { $0.isSeparatorItem }) ?? appMenu.items.count
+        appMenu.insertItem(settingsItem, at: insertIndex)
+        appMenu.insertItem(.separator(), at: insertIndex)
     }
     
     // MARK: - UNUserNotificationCenterDelegate
