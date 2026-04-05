@@ -1,20 +1,50 @@
 #!/bin/bash
 
-# TidalDrift Release Builder v1.3.16
+# TidalDrift Release Builder
 # Uses xcodebuild + ditto --norsrc to avoid resource fork issues
 # Requires: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-set -e
+set -euo pipefail
 
 APP_NAME="TidalDrift"
 BUNDLE_ID="com.goldbergconsulting.tidaldrift"
-VERSION="1.4.3"
-DMG_NAME="${APP_NAME}-${VERSION}"
 
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[0;33m'; RED='\033[0;31m'; NC='\033[0m'
 
+load_env_file() {
+    local env_file="$1"
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$line" != *=* ]] && continue
+
+        local key="${line%%=*}"
+        local value="${line#*=}"
+
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+
+        if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+            value="${value:1:${#value}-2}"
+        elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+
+        export "$key=$value"
+    done <"$env_file"
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env" && echo -e "${BLUE}📋 Loaded .env${NC}"
+[ -f "$SCRIPT_DIR/version.env" ] && source "$SCRIPT_DIR/version.env"
+VERSION="${APP_VERSION:-1.4.3}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    load_env_file "$SCRIPT_DIR/.env"
+    echo -e "${BLUE}📋 Loaded .env${NC}"
+fi
+DMG_NAME="${APP_NAME}-${VERSION}"
 
 NOTARY_PROFILE="${NOTARY_PROFILE:-notarytool-profile}"
 RELEASE_DIR="$(pwd)/dist"
@@ -22,47 +52,57 @@ APP_BUNDLE="$APP_NAME.app"
 
 SKIP_NOTARIZE=false
 for arg in "$@"; do [[ "$arg" == "--skip-notarize" ]] && SKIP_NOTARIZE=true; done
+COPY_TO_SHARE="${COPY_TO_SHARE:-0}"
+
+BUILD_START_TIME=$SECONDS
+step_start() { STEP_START=$SECONDS; }
+step_done() { echo -e "${GREEN}✓ $1 ($((SECONDS - STEP_START))s)${NC}"; }
 
 echo ""
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║     🌊 TidalDrift Release Builder v${VERSION}              ║${NC}"
+echo -e "${BLUE}     🌊 TidalDrift Release Builder v${VERSION}              ${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# Verify Xcode
-[[ "$(xcode-select -p)" != *"Xcode.app"* ]] && echo -e "${RED}❌ Run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer${NC}" && exit 1
-echo -e "${GREEN}✓ Xcode${NC}"
+# [1/8] Verify Xcode
+step_start
+echo -e "${BLUE}[1/8] Verifying Xcode...${NC}"
+if ! xcodebuild -version >/dev/null 2>&1; then
+    echo -e "${RED}❌ Xcode CLI tools not available. Run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer${NC}"
+    exit 1
+fi
+step_done "Xcode ($(xcodebuild -version | head -1))"
 
-# Cleanup
-pkill -9 -f "TidalDrift" 2>/dev/null || true; pkill -9 swift 2>/dev/null || true
+# [2/8] Cleanup
+step_start
+echo -e "${BLUE}[2/8] Cleanup...${NC}"
+pkill -9 -x "$APP_NAME" 2>/dev/null || true
 rm -rf "$APP_BUNDLE" build-xcode
-echo -e "${GREEN}✓ Cleanup${NC}"
-
-# Reset ALL TCC permissions (code signature changes on every rebuild, invalidating old grants)
 for TCC_SERVICE in ScreenCapture Accessibility ListenEvent LocalNetwork; do
     tccutil reset "$TCC_SERVICE" "$BUNDLE_ID" 2>/dev/null || true
 done
-echo -e "${GREEN}✓ TCC permissions reset: ScreenCapture, Accessibility, ListenEvent, LocalNetwork${NC}"
+step_done "Cleanup + TCC reset"
 
-# Certificate
+# [3/8] Certificate
+step_start
+echo -e "${BLUE}[3/8] Checking certificate...${NC}"
 DEV_ID=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
-[ -z "$DEV_ID" ] && echo -e "${RED}❌ No Developer ID${NC}" && exit 1
-echo -e "${GREEN}✓ Certificate${NC}"
+[ -z "$DEV_ID" ] && echo -e "${RED}❌ No Developer ID certificate in keychain${NC}" && exit 1
+step_done "Certificate: ${DEV_ID}"
 
-# Clean source xattrs before build
-echo -e "${BLUE}🧹 Cleaning source xattrs...${NC}"
+# [4/8] Build
+step_start
+echo -e "${BLUE}[4/8] Building (Release)...${NC}"
 find Resources -type f -exec xattr -c {} \; 2>/dev/null || true
-echo -e "${GREEN}✓ Source cleaned${NC}"
+mkdir -p dist/logs
+BUILD_LOG="dist/logs/build-release.log"
+xcodebuild -scheme TidalDrift -configuration Release -destination 'platform=macOS' -derivedDataPath ./build-xcode clean build 2>&1 | tee "$BUILD_LOG"
+[ ! -f "./build-xcode/Build/Products/Release/TidalDrift" ] && echo -e "${RED}❌ Build failed (see ${BUILD_LOG})${NC}" && exit 1
+step_done "Build (log: ${BUILD_LOG})"
 
-# Build
-echo -e "${BLUE}🔨 Building...${NC}"
-mkdir -p dist
-xcodebuild -scheme TidalDrift -configuration Release -destination 'platform=macOS' -derivedDataPath ./build-xcode clean build 2>&1 | grep -E "(BUILD|error:)" | tail -3
-[ ! -f "./build-xcode/Build/Products/Release/TidalDrift" ] && echo -e "${RED}❌ Build failed${NC}" && exit 1
-echo -e "${GREEN}✓ Build${NC}"
-
-# Create bundle using ditto --norsrc (strips resource forks)
-echo -e "${BLUE}📦 Creating bundle...${NC}"
+# [5/8] Create bundle
+step_start
+echo -e "${BLUE}[5/8] Creating .app bundle...${NC}"
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 ditto --norsrc ./build-xcode/Build/Products/Release/TidalDrift "$APP_BUNDLE/Contents/MacOS/TidalDrift"
@@ -78,7 +118,7 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
     <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
     <key>CFBundleName</key><string>TidalDrift</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
@@ -89,23 +129,21 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << EOF
 </dict></plist>
 EOF
 echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
-
-# CRITICAL: Remove ALL xattrs from bundle before signing
-echo -e "${BLUE}🧹 Removing all xattrs from bundle...${NC}"
 find "$APP_BUNDLE" -type f -exec xattr -c {} \; 2>/dev/null || true
 find "$APP_BUNDLE" -type d -exec xattr -c {} \; 2>/dev/null || true
 xattr -rc "$APP_BUNDLE" 2>/dev/null || true
+step_done "Bundle"
 
-echo -e "${GREEN}✓ Bundle${NC}"
-
-# Sign
-echo -e "${BLUE}🔏 Signing...${NC}"
+# [6/8] Sign
+step_start
+echo -e "${BLUE}[6/8] Signing...${NC}"
 codesign --force --deep --options runtime --sign "$DEV_ID" --timestamp --entitlements TidalDrift.entitlements "$APP_BUNDLE"
 codesign --verify --deep --strict "$APP_BUNDLE"
-echo -e "${GREEN}✓ Signed${NC}"
+step_done "Signed"
 
-# DMG
-echo -e "${BLUE}💿 Creating DMG...${NC}"
+# [7/8] DMG
+step_start
+echo -e "${BLUE}[7/8] Creating DMG...${NC}"
 DMG_FINAL="${RELEASE_DIR}/${DMG_NAME}.dmg"
 rm -rf "${RELEASE_DIR}/dmg-staging" "$DMG_FINAL"
 mkdir -p "${RELEASE_DIR}/dmg-staging"
@@ -114,48 +152,60 @@ ln -s /Applications "${RELEASE_DIR}/dmg-staging/Applications"
 hdiutil create -volname "$APP_NAME" -srcfolder "${RELEASE_DIR}/dmg-staging" -ov -format UDZO "$DMG_FINAL"
 rm -rf "${RELEASE_DIR}/dmg-staging"
 codesign --force --sign "$DEV_ID" --timestamp "$DMG_FINAL"
-echo -e "${GREEN}✓ DMG${NC}"
+step_done "DMG"
 
-# Notarize
+# [8/8] Notarize
+step_start
 if [ "$SKIP_NOTARIZE" = true ]; then
-    echo -e "${YELLOW}⏭️  Skipping notarization${NC}"
+    echo -e "${YELLOW}[8/8] Skipping notarization${NC}"
 else
-    echo -e "${BLUE}📤 Notarizing...${NC}"
+    echo -e "${BLUE}[8/8] Notarizing...${NC}"
     if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" &>/dev/null; then
-        [ -n "$APPLE_ID" ] && [ -n "$TEAM_ID" ] && [ -n "$APP_SPECIFIC_PASSWORD" ] && \
+        [ -n "${APPLE_ID:-}" ] && [ -n "${TEAM_ID:-}" ] && [ -n "${APP_SPECIFIC_PASSWORD:-}" ] && \
             xcrun notarytool store-credentials "$NOTARY_PROFILE" --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_SPECIFIC_PASSWORD"
+    fi
+    if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" &>/dev/null; then
+        echo -e "${RED}❌ Notarization credentials are not configured for profile '${NOTARY_PROFILE}'.${NC}"
+        echo "   Option 1: set APPLE_ID, TEAM_ID, and APP_SPECIFIC_PASSWORD in TidalDrift/.env"
+        echo "   Option 2: run xcrun notarytool store-credentials \"$NOTARY_PROFILE\" ..."
+        exit 1
     fi
     xcrun notarytool submit "$DMG_FINAL" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$DMG_FINAL"
-    echo -e "${GREEN}✓ Notarized${NC}"
+    step_done "Notarized"
 fi
 
 rm -rf build-xcode "$APP_BUNDLE"
 
-# Copy to network share for easy install on other Macs
-SMB_MOUNT="/Volumes/Eli Goldberg's Public Folder"
-SMB_URL="smb://US_LDHG427053._smb._tcp.local/Eli Goldberg's Public Folder/"
+if [ "$COPY_TO_SHARE" = "1" ]; then
+    # Optional maintainer workflow, disabled by default for OSS portability.
+    SMB_MOUNT="/Volumes/Eli Goldberg's Public Folder"
+    SMB_URL="smb://US_LDHG427053._smb._tcp.local/Eli Goldberg's Public Folder/"
 
-if [ -d "$SMB_MOUNT" ]; then
-    echo -e "${BLUE}📂 Copying to network share...${NC}"
-    cp "$DMG_FINAL" "$SMB_MOUNT/"
-    echo -e "${GREEN}✓ Copied to $SMB_MOUNT/${NC}"
-else
-    echo -e "${BLUE}📂 Mounting network share...${NC}"
-    if osascript -e "mount volume \"$SMB_URL\"" 2>/dev/null; then
-        sleep 2
-        if [ -d "$SMB_MOUNT" ]; then
-            cp "$DMG_FINAL" "$SMB_MOUNT/"
-            echo -e "${GREEN}✓ Copied to $SMB_MOUNT/${NC}"
-        else
-            echo -e "${YELLOW}⚠️  Mount succeeded but folder not found — copy manually${NC}"
-        fi
+    if [ -d "$SMB_MOUNT" ]; then
+        echo -e "${BLUE}📂 Copying to network share...${NC}"
+        cp "$DMG_FINAL" "$SMB_MOUNT/"
+        echo -e "${GREEN}✓ Copied to $SMB_MOUNT/${NC}"
     else
-        echo -e "${YELLOW}⚠️  Could not mount network share — copy manually${NC}"
-        echo "   open \"$SMB_URL\""
+        echo -e "${BLUE}📂 Mounting network share...${NC}"
+        if osascript -e "mount volume \"$SMB_URL\"" 2>/dev/null; then
+            sleep 2
+            if [ -d "$SMB_MOUNT" ]; then
+                cp "$DMG_FINAL" "$SMB_MOUNT/"
+                echo -e "${GREEN}✓ Copied to $SMB_MOUNT/${NC}"
+            else
+                echo -e "${YELLOW}⚠️  Mount succeeded but folder not found; copy manually${NC}"
+            fi
+        else
+            echo -e "${YELLOW}⚠️  Could not mount network share; copy manually${NC}"
+            echo "   open \"$SMB_URL\""
+        fi
     fi
+else
+    echo -e "${BLUE}ℹ️  Skipping network share copy (set COPY_TO_SHARE=1 to enable)${NC}"
 fi
 
+TOTAL_ELAPSED=$((SECONDS - BUILD_START_TIME))
 echo ""
-echo -e "${GREEN}🎉 Done! ${DMG_NAME}.dmg ($(du -h "$DMG_FINAL" | cut -f1))${NC}"
+echo -e "${GREEN}🎉 Done! ${DMG_NAME}.dmg ($(du -h "$DMG_FINAL" | cut -f1)) in ${TOTAL_ELAPSED}s${NC}"
 echo "   $DMG_FINAL"

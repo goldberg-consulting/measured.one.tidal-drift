@@ -13,9 +13,18 @@ Thank you for your interest in contributing to TidalDrift. This document covers 
 
 - Create a feature branch from `main`: `git checkout -b feature/your-feature`
 - Make your changes
+- Run local checks: `cd TidalDrift && swift build && swift test`
 - Run the in-app test suite: **Settings > Tests > Run All Tests**
 - Verify the build completes: `cd TidalDrift && ./build-app.sh`
 - Submit a pull request targeting `main`
+
+## CI and Release Notes
+
+- CI runs `swiftlint`, `swift build`, `swift test`, and `xcodebuild` for the `TidalDrift` scheme with code signing disabled.
+- Release notarization credentials are loaded from `TidalDrift/.env` and should never be committed.
+- Apple Developer notarization credentials are only required for `./build-release.sh` without `--skip-notarize`.
+- Build version metadata is sourced from `TidalDrift/version.env` (`APP_VERSION`, `BUILD_NUMBER`).
+- `build-release.sh` does not copy artifacts to a network share unless you opt in with `COPY_TO_SHARE=1`.
 
 ## Code Style
 

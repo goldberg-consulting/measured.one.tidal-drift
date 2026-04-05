@@ -40,10 +40,28 @@ TidalDrift replaces the manual workflow of opening System Settings, toggling sha
 - Guided setup wizard for Screen Sharing, File Sharing, SSH, and Firewall
 - Built-in integration test suite (22 tests covering Bonjour, networking, crypto, file transfer, and streaming)
 
+## Installation
+
+### Homebrew (recommended)
+
+```bash
+brew install --cask goldberg-consulting/tap/tidaldrift
+```
+
+To update:
+
+```bash
+brew upgrade --cask tidaldrift
+```
+
+### Manual
+
+Download the latest signed and notarized DMG from [Releases](https://github.com/goldberg-consulting/measured.one.tidal-drift/releases), open it, and drag TidalDrift to Applications.
+
 ## Requirements
 
 - macOS 13.0 (Ventura) or later
-- Xcode 15+ with Swift 5.9+ for building
+- Xcode 15+ with Swift 5.9+ for building from source
 
 ## Building
 
@@ -79,6 +97,14 @@ To skip notarization (sign only):
 ./build-release.sh --skip-notarize
 ```
 
+To copy the release DMG to the maintainer SMB share, enable the optional flag:
+
+```bash
+COPY_TO_SHARE=1 ./build-release.sh
+```
+
+By default, network share copy is disabled so OSS builds remain portable.
+
 ### Swift Package Manager
 
 ```bash
@@ -87,6 +113,14 @@ swift build
 ```
 
 Note: `swift build` compiles the code but does not create an `.app` bundle with the required `Info.plist`, entitlements, or code signing. Use `build-app.sh` for a runnable app.
+
+### Continuous Integration
+
+GitHub Actions validates three paths on every push and pull request to `main`:
+
+- `swiftlint` for style and lint checks
+- `swift build` and `swift test` for SwiftPM compile and test coverage
+- `xcodebuild` on the `TidalDrift` scheme (with code signing disabled) to validate the app target build path
 
 ## Permissions
 
@@ -127,6 +161,17 @@ TidalDrift/
 ```
 
 ## Configuration
+
+### Build version metadata (`TidalDrift/version.env`)
+
+Both build scripts load app version values from `TidalDrift/version.env`:
+
+```bash
+APP_VERSION=1.4.3
+BUILD_NUMBER=10403
+```
+
+`APP_VERSION` maps to `CFBundleShortVersionString` and `BUILD_NUMBER` maps to `CFBundleVersion` in generated app bundles.
 
 ### Notarization credentials (`TidalDrift/.env`)
 
